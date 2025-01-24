@@ -2,8 +2,94 @@
 output: html_document
 ---
 
+# ST 310 Group Project: Predicting Presence of Heart Disease in Patients
+
+**Candidate Numbers:**
+
 ```{r}
 library(ISLR)
 print("hello folks")
 ```
 
+## Outline/Contents
+
+
+
+
+## Introduction
+
+### The Dataset
+Where from, vars used etc etc
+
+### What We Aim to Achieve
+Motivations and objectives
+
+## Set Up
+
+### Cleaning
+Any cleaning we have to do
+### Exploratory Data Analysis (EDA)
+Any eda and domain-specific research
+
+
+
+
+## Model Fitting
+
+
+### Baseline Model: Logistic (Few Predictors)
+Explain why we used this
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+
+### Gradient-Descent-Based Model: Logistic (Few Predictors)
+Take a decreasing size step, and use a loss function without a constant
+Explain why we used this
+#### Explain how this works (Stickiest Part of Project)
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+### Relatively Interpretable Model: Logistic (Multiple Predictors and Interactions)
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+
+### High-Dimensional Model: Regularised Logistic (Few Predictors)
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+
+### Predictively Accurate Model: Classification Random Forest
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+## Conclusion
+
+Did we achieve our objective? Why/Why not?
+
+## Bibliography
+
+
+## Annex
+Only if you get disgusting enough to go really technical. OR, if we tried something first, and it didn't wuite work, we can show that here.
