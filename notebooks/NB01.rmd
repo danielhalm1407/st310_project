@@ -35,13 +35,23 @@ library(rstudioapi) # to set the correct working directory
 library(tree) # for tree fitting to guage the functional form of the data
 ```
 
-
+### Directories/Paths
+#### Set the current directory to the working directory
 ```{r}
 setPath <- dirname(getSourceEditorContext()$path)
 
 setwd(setPath)
 getwd()
 ```
+
+#### Set the path for the data and predictions
+```{r, echo=FALSE}
+# Change data_path to where I saved the data
+data_path <- paste0(getwd(),"/data/")
+predictions_path <- paste0(getwd(),"/predictions/")
+
+```
+
 ### Cleaning
 Any cleaning we have to do
 ### Exploratory Data Analysis (EDA)
