@@ -33,6 +33,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(gam) # to fit gams
 library(rstudioapi) # to set the correct working directory
 library(tree) # for tree fitting to guage the functional form of the data
+library(dplyr) # for filtering and sorting to be easier.
 ```
 
 ### Directories/Paths
@@ -47,11 +48,21 @@ getwd()
 #### Set the path for the data and predictions
 ```{r, echo=FALSE}
 # Change data_path to where I saved the data
-data_path <- paste0(getwd(),"/data/")
-predictions_path <- paste0(getwd(),"/predictions/")
+data_path <- paste0(getwd(),"/../data/")
+predictions_path <- paste0(getwd(),"/../predictions/")
 
 ```
 
+### Load Data
+```{r}
+Heart <- read.csv(paste0(data_path, "Heart.csv"))
+# Rename the outcome column to y
+Heart <- Heart %>% rename(y = target)
+# Move the last column to the front so that the cross-validation works
+Heart <- Heart[, c(ncol(Heart), 1:(ncol(Heart) - 1))]
+head(Heart)
+names(Heart)
+```
 ### Cleaning
 Any cleaning we have to do
 ### Exploratory Data Analysis (EDA)
@@ -61,6 +72,263 @@ Any eda and domain-specific research
 
 
 ## Model Fitting
+
+### Set Up
+
+#### Set up separate training and validation sets when k-fold cross-validation takes too long
+```{r}
+
+make_sets <- function(df, frac = 0.6, classify = F, test_bal = 0.68) {
+  train_indices <- sample(1:nrow(df), size = frac * nrow(df), replace = F)
+  
+  y_train <- df[, 1]
+  X_train <- as.matrix(df[, -1])
+  
+  if (frac>0) {
+    valid_indices <- -train_indices
+  }
+  else {
+    valid_indices = rownames(df)
+  }
+  train_fold <- df[train_indices,]
+  valid_fold <- df[valid_indices,]
+  
+  const_yhat_success <- NA
+  outcome_counts_pre <- NA
+  outcome_counts_valid <- NA
+  if (classify==T) {
+    outcome_counts_pre <- valid_fold |> count(y)
+    outcome_counts_pre$proportion <- outcome_counts_pre$n / sum(outcome_counts_pre$n)
+    rare_class_size <- round(((1-test_bal) * outcome_counts_pre[outcome_counts_pre$y==1,"n"] * (1/test_bal)),0)
+    rare_class_indices <- which(valid_fold$y==0)
+    common_class_indices <- which(valid_fold$y==1)
+    sampled_indices <- sample(rare_class_indices, size = rare_class_size, replace = FALSE)
+    valid_indices <- c(sampled_indices,common_class_indices)
+    valid_fold <- valid_fold[valid_indices,]
+    outcome_counts_valid <- valid_fold |> count(y)
+    outcome_counts_valid$proportion <- outcome_counts_valid$n / sum(outcome_counts_valid$n)
+    const_yhat_success <- outcome_counts_valid$proportion[[2]]
+  }
+  #train_fold <- train_fold[order(rownames(train_fold)),]
+  #valid_fold <- valid_fold[order(rownames(valid_fold)),]
+  
+  y_train_fold <- train_fold[, 1]
+  X_train_fold <- as.matrix(train_fold[, -1])
+  
+  y_valid_fold <- valid_fold[, 1]
+  X_valid_fold <- as.matrix(valid_fold[, -1])
+  
+  return(list(y_train = y_train, X_train=X_train, train_fold = train_fold, valid_fold = valid_fold, y_train_fold = y_train_fold, X_train_fold = X_train_fold, y_valid_fold = y_valid_fold, X_valid_fold=X_valid_fold, const_yhat_success= const_yhat_success, outcome_counts_pre = outcome_counts_pre, outcome_counts_valid = outcome_counts_valid, train_indices=train_indices, valid_indices = valid_indices))
+}
+make_sets_output_1 <- make_sets(df=Heart )
+Heart_train_fold <- make_sets_output_1$train_fold
+Heart_valid_fold <- make_sets_output_1$valid_fold
+
+Heart_X_train_fold <- make_sets_output_1$X_train_fold
+Heart_X_valid_fold <- make_sets_output_1$X_valid_fold
+
+Heart_y_train_fold <- make_sets_output_1$y_train_fold
+Heart_y_valid_fold <- make_sets_output_1$y_valid_fold
+```
+
+```{r, echo=F}
+n_preds <- (dim(Heart)[2]-1)
+print(paste("It seems that our data has", n_preds, "predictors"))
+```
+
+#### Create A Dataframe to Store All of Our Model Types and Misclass Estimates
+```{r}
+gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
+  df = data.frame(
+    model_type = character(len),
+    model_name = character(len)
+  )
+  for (measure in accuracy_measures) {
+    df[[measure]] <- numeric(len)
+  }
+  #tp stands for tuning parameter
+  df$tp1_name = character(len)
+  df$tp2_name = character(len)
+  df$tp3_name = character(len)
+  df$tp1_value = numeric(len)
+  df$tp2_value = numeric(len)
+  df$tp3_value = numeric(len)
+
+  return(df)
+}
+Heart_models <- gen_models_df(accuracy_measures = c("cv_misclass_rate"))
+
+Heart_models
+
+```
+#### Define a function that helps to validarte or cross-validate a grid of tuning parameters
+```{r }
+validate <- function(train_df = Heart, method = "cv", model_f = "tree", grid_df = tree_grid, k=5, frac = 0.6, matrix = F, classify=F, test_bal = 0.68, error_type = "mse") {
+  model.f <- get(model_f)
+  n_tps <- ncol(grid_df)
+  folds <- sample(rep(1:k, length.out = nrow(train_df)))
+  sets_output <- make_sets(df = train_df, frac=frac, classify=classify, test_bal=test_bal)
+  X <- sets_output$X_train
+  Y <- sets_output$y_train
+  train_indices <- sets_output$train_indices
+  valid_indices <- sets_output$valid_indices
+  fits <- c()
+  preds <- list()
+  valids <- list()
+  for (i in 1:nrow(grid_df)) {
+    e_folds <- c()
+    tree_sizes <- c()
+    if (matrix==T) {
+      model_input <- list()
+      if (model_f=="gbart") {
+        xname = "x.train"
+        yname = "y.train"
+      }
+      else {
+        xname = "x"
+        yname = "y"
+      }
+      model_input[[xname]] <- X
+      model_input[[yname]] <- Y
+    }
+    
+    else {
+      model_input <- list(
+      formula = as.formula("y ~ ."), 
+      data = train_df
+      )
+    }
+    for (tp in names(grid_df)[1:n_tps]) {
+      if (all(is.na(grid_df[[tp]]))==F) {
+        if (tp=="mindev") {
+          model_input[["control"]] <- tree.control(nobs = length(train_df$y), mindev = grid_df[i,tp])
+        }
+        else if (tp=="preds_used") {
+          model_input[["formula"]] <- as.formula(paste("y ~ ", grid_df[i,tp]))
+        }
+        else if (tp!="thresh") {
+            model_input[[tp]] <- grid_df[i,tp]
+        }
+      }
+    }
+  if (method == "cv") {
+    for (fold in 1:k) {
+        X_train_fold <- X[folds != fold, ]
+        y_train_fold <- Y[folds != fold]
+        X_valid_fold <- X[folds == fold, ]
+        y_valid_fold <- Y[folds == fold]
+        temp_df <- data.frame(y = y_valid_fold, X_valid_fold)
+        sets_output <- make_sets(df = temp_df, frac=0, classify=classify, test_bal=test_bal)
+        X_valid_fold <- sets_output$X_valid_fold
+        y_valid_fold <- sets_output$y_valid_fold
+        valid_df <- data.frame(y_valid_fold, X_valid_fold)
+      if (matrix==T) {
+        model_input[[xname]] <- X_train_fold
+        model_input[[yname]] <- y_train_fold
+        model <- do.call(model.f, model_input)
+        predictions <- predict(model, X_valid_fold)
+      }
+      else {
+        train_fold <- train_df[folds!=fold,]
+        valid_fold <- valid_df
+        model_input$data <- train_fold
+        model <- do.call(model.f, model_input)
+        if (classify==T) {
+          prob_predictions <- predict(model, newdata = valid_fold, type = "response")
+          predictions <- as.factor(as.numeric(prob_predictions > grid_df[i,"thresh"]))
+        }
+        else {
+          predictions <- predict(model, valid_fold)
+        }
+      } 
+      
+      fits <- c(fits, model)
+      preds[[paste0(i,"_",k)]] <- predictions
+      valids[[paste0(i,"_",k)]] <- y_valid_fold
+      if (classify==T ) {
+        e_fold <- sum(predictions != (as.numeric(y_valid_fold)-1)) / length(y_valid_fold)
+        e_folds <- c(e_folds, e_fold)
+      }
+      else {
+        e_fold <- mean((predictions - y_valid_fold)^2)
+        e_folds <- c(e_folds, e_fold)
+      }
+      
+      
+      if (model_f == "tree") tree_sizes <- c(tree_sizes, length(unique(model$where)))
+    }
+  }
+  else if (method=="v") {
+    X_train_fold <- X[train_indices, ]
+    y_train_fold <- Y[train_indices]
+    X_valid_fold <- X[valid_indices, ]
+    y_valid_fold <- Y[valid_indices]
+    if (matrix==T) {
+        model_input[[xname]] <- X_train_fold
+        model_input[[yname]] <- y_train_fold
+        model <- do.call(model.f, model_input)
+        predictions <- predict(model, X_valid_fold)
+        if (model_f=="gbart") {
+          predictions <- colMeans(predictions)
+        }
+    }
+    else {
+        train_fold <- train_df[train_indices,]
+        valid_fold <- train_df[valid_indices,]
+        model_input$data <- train_fold
+        model <- do.call(model.f, model_input)
+        if (classify==T) {
+          prob_predictions <- predict(model, newdata = valid_fold, type = "response")
+          predictions <- as.factor(as.numeric(prob_predictions > grid_df[i,"thresh"]))
+        }
+        else {
+          predictions <- predict(model, valid_fold)
+        }
+        
+    }
+    fits <- c(fits, model)
+    preds[[i]] <- predictions
+    valids[[i]] <- y_valid_fold
+    if (classify==T ) {
+        e_fold <- sum(predictions != (as.numeric(y_valid_fold)-1)) / length(y_valid_fold)
+        e_folds <- c(e_folds, e_fold)
+    }
+    else {
+        e_fold <- mean((predictions - y_valid_fold)^2)
+        e_folds <- c(e_folds, e_fold)
+    }
+    
+    
+    if (model_f == "tree") tree_sizes <- c(tree_sizes, length(unique(model$where)))
+  }
+  
+  grid_df[[paste0(method,"_", error_type)]][i] <- mean(e_folds)
+  if (model_f == "tree") grid_df$tree_size[i] <- mean(tree_sizes)
+
+  }
+return(list(grid_df = grid_df, fits = fits , preds=preds , valids = valids, train_indices=train_indices, method=method, model_f = model_f))
+}
+```
+```{r}
+mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
+
+tree_grid <- expand.grid(mindev = mindev_values)
+#grid_results$tree_size <- NA
+#tree_grid <- data.frame(dummy = rep(NA,4))
+tree_grid
+```
+```{r} 
+tree_df_output <- validate(method = "cv")
+tree_df <- tree_df_output$grid_df
+tree_df
+
+```
+
+```{r}
+test <- tree(y ~ ., Heart)
+preds <- predict(test, Heart)
+
+```
 
 
 ### Baseline Model: Logistic (Few Predictors)
