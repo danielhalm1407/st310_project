@@ -58,6 +58,8 @@ predictions_path <- paste0(getwd(),"/../predictions/")
 Heart <- read.csv(paste0(data_path, "Heart.csv"))
 # Rename the outcome column to y
 Heart <- Heart %>% rename(y = target)
+# Change y to be factor so that  it is recognised as classification
+Heart$y <- factor(Heart$y)
 # Move the last column to the front so that the cross-validation works
 Heart <- Heart[, c(ncol(Heart), 1:(ncol(Heart) - 1))]
 head(Heart)
@@ -309,26 +311,7 @@ validate <- function(train_df = Heart, method = "cv", model_f = "tree", grid_df 
 return(list(grid_df = grid_df, fits = fits , preds=preds , valids = valids, train_indices=train_indices, method=method, model_f = model_f))
 }
 ```
-```{r}
-mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
 
-tree_grid <- expand.grid(mindev = mindev_values)
-#grid_results$tree_size <- NA
-#tree_grid <- data.frame(dummy = rep(NA,4))
-tree_grid
-```
-```{r} 
-tree_df_output <- validate(method = "cv")
-tree_df <- tree_df_output$grid_df
-tree_df
-
-```
-
-```{r}
-test <- tree(y ~ ., Heart)
-preds <- predict(test, Heart)
-
-```
 
 
 ### Baseline Model: Logistic (Few Predictors)
@@ -373,7 +356,39 @@ Look at results from best Model
 ### Predictively Accurate Model: Classification Random Forest
 
 #### Validate/Cross-Validate Best Tuning Parameters
-Run some code
+
+
+**Start with Classification Tree**
+```{r}
+mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
+
+tree_grid <- expand.grid(mindev = mindev_values)
+#grid_results$tree_size <- NA
+#tree_grid <- data.frame(dummy = rep(NA,4))
+tree_grid
+```
+```{r} 
+tree_df_output <- validate(method = "cv")
+tree_df <- tree_df_output$grid_df
+tree_df
+
+```
+
+```{r}
+heart.tree <- tree(y ~ ., Heart_train_fold)
+preds <- predict(test, Heart_valid_fold, type = "Class")
+plot(preds, as.numeric(Heart_valid_fold$y)-1)
+abline(0,1)
+```
+
+#### Cross-Validate the Best Pruning Coefficient, K (Penalty for number of terminal nodes) and overall tree size.
+```{r}
+cv.heart.tree <- cv.tree(heart.tree, FUN = prune.misclass)
+par(mfrow = c(1, 2))
+plot(cv.heart.tree$size, cv.heart.tree$dev, type = "b")
+plot(cv.heart.tree$k, cv.heart.tree$dev, type = "b")
+```
+
 #### Analyse Results
 Look at results from best Model
 
