@@ -26,6 +26,22 @@ Motivations and objectives
 
 ## Set Up
 
+### Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#library(tidyverse)
+library(gam) # to fit gams
+library(rstudioapi) # to set the correct working directory
+library(tree) # for tree fitting to guage the functional form of the data
+```
+
+
+```{r}
+setPath <- dirname(getSourceEditorContext()$path)
+
+setwd(setPath)
+getwd()
+```
 ### Cleaning
 Any cleaning we have to do
 ### Exploratory Data Analysis (EDA)
