@@ -6,10 +6,7 @@ output: html_document
 
 **Candidate Numbers:**
 
-```{r}
-library(ISLR)
-print("hello folks")
-```
+
 
 ## Outline/Contents
 
@@ -29,11 +26,21 @@ Motivations and objectives
 ### Packages
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-#library(tidyverse)
-library(gam) # to fit gams
-library(rstudioapi) # to set the correct working directory
-library(tree) # for tree fitting to guage the functional form of the data
+# General
 library(dplyr) # for filtering and sorting to be easier.
+library(rstudioapi) # to set the correct working directory
+
+
+# Fitting Models
+#library(tidyverse)
+library(ISLR) # to get all the data and models from ISLR to experiment
+library(gam) # to fit gams
+library(tree) # for tree fitting to guage the functional form of the data
+
+
+# Plotting/ Visualisation
+library(ggplot2) # for maintainable plots with a lot of interactability
+library(yardstick) # for plotting an ROC curve
 ```
 
 ### Directories/Paths
@@ -58,10 +65,14 @@ predictions_path <- paste0(getwd(),"/../predictions/")
 Heart <- read.csv(paste0(data_path, "Heart.csv"))
 # Rename the outcome column to y
 Heart <- Heart %>% rename(y = target)
-# Change y to be factor so that  it is recognised as classification
-Heart$y <- factor(Heart$y)
+
 # Move the last column to the front so that the cross-validation works
 Heart <- Heart[, c(ncol(Heart), 1:(ncol(Heart) - 1))]
+
+# Change y to be factor so that  it is recognised as classification
+Heart_non_fctr <- Heart
+Heart$y <- factor(Heart$y)
+
 head(Heart)
 names(Heart)
 ```
@@ -137,7 +148,16 @@ Heart_y_valid_fold <- make_sets_output_1$y_valid_fold
 n_preds <- (dim(Heart)[2]-1)
 print(paste("It seems that our data has", n_preds, "predictors"))
 ```
+#### Look at the Class Balance in Our Data
+```{r}
+# We need the training set to be balanced, yet the validation set to have 68% balance.
+outcome_counts_fold <- Heart_valid_fold |> count(y)
+outcome_counts_fold$proportion <- outcome_counts_fold$n / sum(outcome_counts_fold$n)
+const_yhat_success <- outcome_counts_fold$proportion[[2]]
+outcome_counts_fold
+```
 
+Nice, it seems rather balanced!
 #### Create A Dataframe to Store All of Our Model Types and Misclass Estimates
 ```{r}
 gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
@@ -359,7 +379,7 @@ Look at results from best Model
 
 
 **Start with Classification Tree**
-```{r}
+```{r, eval=F}
 mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
 
 tree_grid <- expand.grid(mindev = mindev_values)
@@ -367,7 +387,7 @@ tree_grid <- expand.grid(mindev = mindev_values)
 #tree_grid <- data.frame(dummy = rep(NA,4))
 tree_grid
 ```
-```{r} 
+```{r, eval=F} 
 tree_df_output <- validate(method = "cv")
 tree_df <- tree_df_output$grid_df
 tree_df
@@ -375,19 +395,104 @@ tree_df
 ```
 
 ```{r}
-heart.tree <- tree(y ~ ., Heart_train_fold)
-preds <- predict(test, Heart_valid_fold, type = "Class")
+# Fit a tree
+tree_fit <- tree(y ~ ., Heart_train_fold)
+# Fit a glm
+heart_2 <- glm(y~ ., Heart_non_fctr, family = "gaussian")
+# Store the Probability predictions (the second row corresponds to the postive class probability)
+tree_fit_prob_preds <- predict(tree_fit, Heart_valid_fold)[,2]
+
+#GHet the standard bayesian classifier class predictions
+preds <- predict(tree_fit, Heart_valid_fold, type = "class")
 plot(preds, as.numeric(Heart_valid_fold$y)-1)
-abline(0,1)
+
 ```
 
 #### Cross-Validate the Best Pruning Coefficient, K (Penalty for number of terminal nodes) and overall tree size.
 ```{r}
-cv.heart.tree <- cv.tree(heart.tree, FUN = prune.misclass)
+cv.tree_fit <- cv.tree(tree_fit, FUN = prune.misclass)
 par(mfrow = c(1, 2))
-plot(cv.heart.tree$size, cv.heart.tree$dev, type = "b")
-plot(cv.heart.tree$k, cv.heart.tree$dev, type = "b")
+plot(cv.tree_fit$size, cv.tree_fit$dev, type = "b")
+plot(cv.tree_fit$k, cv.tree_fit$dev, type = "b")
 ```
+#### Analyse the confusion matrices for the tree model.
+```{r}
+
+tree_fit_predictions <-data.frame(
+  y = Heart_valid_fold$y,
+  .fitted = tree_fit_prob_preds
+) |> 
+  mutate(yhat = factor(as.numeric(.fitted > const_yhat_success))) |>
+  mutate(misclass = (y!=yhat))
+paste("Class Balance:")
+tree_fit_predictions |> pull(.fitted) |> mean() # same as mean(tree_fit_predictions$.fitted)
+paste("Misclass Rate:")
+sum((tree_fit_predictions$y!=tree_fit_predictions$yhat)) / nrow(tree_fit_predictions)
+```
+**Look at ROC Curve to guage Trade-Off**
+```{r, eval=F}
+tree_fit_predictions |>
+  roc_curve(truth = y, .fitted,
+            event_level = "second") |>
+  autoplot()
+# the 'truth' is just the training y here, not the testing y, which we do not have, nor a validation set.
+```
+**Classify at different thresholds.**
+
+```{r, eval=F}
+higher_cutoff <- const_yhat_success + .15
+confusion_matrix_higher <-
+  tree_fit_predictions |>
+  mutate(yhat = factor(as.numeric(.fitted > higher_cutoff))) |> # this line predicts y = 1 ONLY if the predicted conditional probability is above the higher cutoff
+  conf_mat(truth = y, estimate = yhat)
+```
+```{r, eval=F}
+confusion_matrix_medium <-
+  tree_fit_predictions |>
+  mutate(yhat = factor(as.numeric(.fitted > const_yhat_success))) |> 
+  conf_mat(truth = y, estimate = yhat)
+```
+
+
+```{r, eval=F}
+lower_cutoff <- const_yhat_success - 0.15
+confusion_matrix_lower <-
+  tree_fit_predictions |>
+  mutate(yhat = factor(as.numeric(.fitted > lower_cutoff))) |>
+  conf_mat(truth = y, estimate = yhat)
+```
+
+**1. Balanced Confusion Matrix**
+```{r, eval=F}
+confusion_matrix_medium |> autoplot(type = "heatmap")
+```
+**3. Low Cut-Off Confusion Matrix**
+```{r, eval=F}
+confusion_matrix_lower |> autoplot(type = "heatmap")
+```
+**3. High Cut-Off Confusion Matrix**
+```{r, eval=F}
+confusion_matrix_higher |> autoplot(type = "heatmap")
+```
+**Comparing key sum stats:**
+
+```{r, eval=F}
+higher_summary <- summary(confusion_matrix_higher) |>
+  mutate(higher = .estimate) |>
+  dplyr::select(.metric, higher)
+medium_summary <- summary(confusion_matrix_medium) |>
+  mutate(medium = .estimate) |>
+  dplyr::select(medium)
+lower_summary <- summary(confusion_matrix_lower) |>
+  mutate(lower = .estimate) |>
+  dplyr::select(lower)
+cbind(higher_summary, medium_summary, lower_summary) |>
+  knitr::kable()
+
+
+```
+
+As seen from the confusion matrices earlier, accuracy benefits the lower and not the higher threshold.
 
 #### Analyse Results
 Look at results from best Model
