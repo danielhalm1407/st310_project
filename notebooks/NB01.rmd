@@ -133,16 +133,45 @@ make_sets <- function(df, frac = 0.6, classify = F, test_bal = 0.68) {
   
   return(list(y_train = y_train, X_train=X_train, train_fold = train_fold, valid_fold = valid_fold, y_train_fold = y_train_fold, X_train_fold = X_train_fold, y_valid_fold = y_valid_fold, X_valid_fold=X_valid_fold, const_yhat_success= const_yhat_success, outcome_counts_pre = outcome_counts_pre, outcome_counts_valid = outcome_counts_valid, train_indices=train_indices, valid_indices = valid_indices))
 }
+```
+
+
+```{r}
+# Get matrix versions of the full data
+X <- make_sets_output_1$X_train
+Y <- make_sets_output_1$y_train
+
+# Make training and validation sets for the whole data
 make_sets_output_1 <- make_sets(df=Heart )
 Heart_train_fold <- make_sets_output_1$train_fold
 Heart_valid_fold <- make_sets_output_1$valid_fold
 
+# Make matrix versions of each of these
 Heart_X_train_fold <- make_sets_output_1$X_train_fold
 Heart_X_valid_fold <- make_sets_output_1$X_valid_fold
 
 Heart_y_train_fold <- make_sets_output_1$y_train_fold
 Heart_y_valid_fold <- make_sets_output_1$y_valid_fold
+
+# Extract the indices used for training and validation for future use
+train_indices <- make_sets_output_1$train_indices
+valid_indices <- make_sets_output_1$valid_indices
+
+# Create k folds if we want to use the same folds for cross validation for all of the model fitting procedures and all specifications for all model fitting procedures
+k <- 5
+folds <- sample(rep(1:k, length.out = nrow(Heart)))
+
+train_input <- list(train_df = Heart, X_train = X, y_train = Y, train_indices=train_indices, valid_indices = valid_indices, folds=folds)
+
 ```
+
+
+```{r}
+dim(Heart_X_valid_fold)
+length(Heart_y_valid_fold)
+data.frame(y = Heart_y_valid_fold, Heart_X_valid_fold)
+```
+
 
 ```{r, echo=F}
 n_preds <- (dim(Heart)[2]-1)
@@ -183,154 +212,200 @@ Heart_models <- gen_models_df(accuracy_measures = c("cv_misclass_rate"))
 Heart_models
 
 ```
-#### Define a function that helps to validarte or cross-validate a grid of tuning parameters
-```{r }
-validate <- function(train_df = Heart, method = "cv", model_f = "tree", grid_df = tree_grid, k=5, frac = 0.6, matrix = F, classify=F, test_bal = 0.68, error_type = "mse") {
-  model.f <- get(model_f)
-  n_tps <- ncol(grid_df)
-  folds <- sample(rep(1:k, length.out = nrow(train_df)))
-  sets_output <- make_sets(df = train_df, frac=frac, classify=classify, test_bal=test_bal)
-  X <- sets_output$X_train
-  Y <- sets_output$y_train
-  train_indices <- sets_output$train_indices
-  valid_indices <- sets_output$valid_indices
-  fits <- c()
-  preds <- list()
-  valids <- list()
-  for (i in 1:nrow(grid_df)) {
-    e_folds <- c()
-    tree_sizes <- c()
-    if (matrix==T) {
-      model_input <- list()
-      if (model_f=="gbart") {
-        xname = "x.train"
-        yname = "y.train"
-      }
-      else {
-        xname = "x"
-        yname = "y"
-      }
-      model_input[[xname]] <- X
-      model_input[[yname]] <- Y
-    }
-    
-    else {
-      model_input <- list(
-      formula = as.formula("y ~ ."), 
-      data = train_df
-      )
-    }
-    for (tp in names(grid_df)[1:n_tps]) {
-      if (all(is.na(grid_df[[tp]]))==F) {
-        if (tp=="mindev") {
-          model_input[["control"]] <- tree.control(nobs = length(train_df$y), mindev = grid_df[i,tp])
-        }
-        else if (tp=="preds_used") {
-          model_input[["formula"]] <- as.formula(paste("y ~ ", grid_df[i,tp]))
-        }
-        else if (tp!="thresh") {
-            model_input[[tp]] <- grid_df[i,tp]
-        }
-      }
-    }
-  if (method == "cv") {
-    for (fold in 1:k) {
-        X_train_fold <- X[folds != fold, ]
-        y_train_fold <- Y[folds != fold]
-        X_valid_fold <- X[folds == fold, ]
-        y_valid_fold <- Y[folds == fold]
-        temp_df <- data.frame(y = y_valid_fold, X_valid_fold)
-        sets_output <- make_sets(df = temp_df, frac=0, classify=classify, test_bal=test_bal)
-        X_valid_fold <- sets_output$X_valid_fold
-        y_valid_fold <- sets_output$y_valid_fold
-        valid_df <- data.frame(y_valid_fold, X_valid_fold)
-      if (matrix==T) {
-        model_input[[xname]] <- X_train_fold
-        model_input[[yname]] <- y_train_fold
-        model <- do.call(model.f, model_input)
-        predictions <- predict(model, X_valid_fold)
-      }
-      else {
-        train_fold <- train_df[folds!=fold,]
-        valid_fold <- valid_df
-        model_input$data <- train_fold
-        model <- do.call(model.f, model_input)
-        if (classify==T) {
-          prob_predictions <- predict(model, newdata = valid_fold, type = "response")
-          predictions <- as.factor(as.numeric(prob_predictions > grid_df[i,"thresh"]))
-        }
-        else {
-          predictions <- predict(model, valid_fold)
-        }
-      } 
-      
-      fits <- c(fits, model)
-      preds[[paste0(i,"_",k)]] <- predictions
-      valids[[paste0(i,"_",k)]] <- y_valid_fold
-      if (classify==T ) {
-        e_fold <- sum(predictions != (as.numeric(y_valid_fold)-1)) / length(y_valid_fold)
-        e_folds <- c(e_folds, e_fold)
-      }
-      else {
-        e_fold <- mean((predictions - y_valid_fold)^2)
-        e_folds <- c(e_folds, e_fold)
-      }
-      
-      
-      if (model_f == "tree") tree_sizes <- c(tree_sizes, length(unique(model$where)))
-    }
+#### Define a set of functions that help to validate or cross-validate a grid of tuning parameters
+
+
+
+```{r}
+get_predictions <- function(model, X_valid_fold, y_valid_fold, classify, formula, model_f, matrix, thresh) {
+  
+  if (matrix) {
+    valid_fold <- X_valid_fold
   }
-  else if (method=="v") {
-    X_train_fold <- X[train_indices, ]
-    y_train_fold <- Y[train_indices]
-    X_valid_fold <- X[valid_indices, ]
-    y_valid_fold <- Y[valid_indices]
-    if (matrix==T) {
-        model_input[[xname]] <- X_train_fold
-        model_input[[yname]] <- y_train_fold
-        model <- do.call(model.f, model_input)
-        predictions <- predict(model, X_valid_fold)
-        if (model_f=="gbart") {
-          predictions <- colMeans(predictions)
-        }
-    }
-    else {
-        train_fold <- train_df[train_indices,]
-        valid_fold <- train_df[valid_indices,]
-        model_input$data <- train_fold
-        model <- do.call(model.f, model_input)
-        if (classify==T) {
-          prob_predictions <- predict(model, newdata = valid_fold, type = "response")
-          predictions <- as.factor(as.numeric(prob_predictions > grid_df[i,"thresh"]))
-        }
-        else {
-          predictions <- predict(model, valid_fold)
-        }
-        
-    }
-    fits <- c(fits, model)
-    preds[[i]] <- predictions
-    valids[[i]] <- y_valid_fold
-    if (classify==T ) {
-        e_fold <- sum(predictions != (as.numeric(y_valid_fold)-1)) / length(y_valid_fold)
-        e_folds <- c(e_folds, e_fold)
-    }
-    else {
-        e_fold <- mean((predictions - y_valid_fold)^2)
-        e_folds <- c(e_folds, e_fold)
+  else {
+    valid_fold <- data.frame(y = y_valid_fold, X_valid_fold)
+  }
+  if (classify) {
+    if (model_f == "tree") {
+      prob_predictions <- predict(model, valid_fold)[, 2]
+    } else {
+      prob_predictions <- predict(model, valid_fold, type = "response")
     }
     
     
-    if (model_f == "tree") tree_sizes <- c(tree_sizes, length(unique(model$where)))
+    predictions <- as.factor(as.numeric(prob_predictions > thresh))
+  } else {
+    predictions <- predict(model, valid_fold)
   }
   
-  grid_df[[paste0(method,"_", error_type)]][i] <- mean(e_folds)
-  if (model_f == "tree") grid_df$tree_size[i] <- mean(tree_sizes)
-
-  }
-return(list(grid_df = grid_df, fits = fits , preds=preds , valids = valids, train_indices=train_indices, method=method, model_f = model_f))
+  return(predictions)
 }
+
+
+calculate_error <- function(predictions, true_values, classify) {
+  if (classify) {
+    return(mean(predictions != (as.numeric(true_values) - 1)))
+  } else {
+    return(mean((predictions - true_values)^2))
+  }
+}
+
+
+
+cross_validate <- function(thresh, model_f, X, Y, k, classify, train_df, folds, model_input, matrix, xname, yname) {
+  e_folds <- c()  # Store error metrics for each fold
+  fits <- list()   # Store model fits for each fold
+  preds <- list()  # Store predictions for each fold
+  valids <- list() # Store true y-values for each fold
+  
+  for (fold in 1:k) {
+    # Train/validation split for the fold
+    X_train_fold <- X[folds != fold, ]
+    y_train_fold <- Y[folds != fold]
+    X_valid_fold <- X[folds == fold, ]
+    y_valid_fold <- Y[folds == fold]
+    
+    # Update model_input for this fold
+    if (!matrix) {
+      model_input$data <- train_df[folds != fold, ]
+    } else {
+      model_input[[xname]] <- X_train_fold
+      model_input[[yname]] <- y_train_fold
+    }
+
+    
+    # Train model
+    model <- do.call(model_f, model_input)
+    
+    # Get validation predictions
+    predictions <- get_predictions(model, X_valid_fold, y_valid_fold, classify, model_input$formula, model_f, matrix, thresh)
+    
+    # Compute error for this fold
+    fold_error <- calculate_error(predictions, y_valid_fold, classify)
+
+    
+    # Store results
+    fits[[fold]] <- model
+    preds[[fold]] <- predictions
+    valids[[fold]] <- y_valid_fold
+    e_folds <- c(e_folds, fold_error)
+  }
+  
+  # Compute overall CV error
+  avg_error <- mean(e_folds)
+  
+  # Return models, predictions, validation targets, and error
+  return(list(fits = fits, preds = preds, valids = valids, error = avg_error))
+}
+
+
+
+
+validate <- function(thresh, model_f, X, Y, train_indices, valid_indices, classify, train_df, model_input, matrix, xname, yname) {
+  
+  # Update model_input for this fold
+  if (!matrix) {
+    model_input$data <- train_df[train_indices,]
+  } else {
+      model_input[[xname]] <- X[train_indices, ]
+      model_input[[yname]] <- y[train_indices]
+  }
+  
+  # Train model using pre-set model_input
+  model <- do.call(model_f, model_input)
+  # Get validation predictions
+  predictions <- get_predictions(model, X[valid_indices, ], Y[valid_indices], classify, model_input$formula, model_f, matrix, thresh)
+  
+  # Compute validation error
+  fold_error <- calculate_error(predictions, Y[valid_indices], classify)
+
+  
+  # Return the model, predictions, validation targets, and error
+  return(list(fits = model, preds = predictions, valids = Y[valid_indices], error = fold_error))
+}
+
+
+
+
+
+grid_validate <- function(train_input_list = train_input, method = "cv", model_f = "tree", grid_df, k = 5, frac = 0.6, matrix = FALSE, classify = FALSE, test_bal = 0.68, reshuffle = F) {
+  train_df <- train_input_list$train_df
+  if (reshuffle) {
+    sets_output <- make_sets(df = train_df, frac = frac, classify = classify, test_bal = test_bal)
+    X <- sets_output$X_train
+    Y <- sets_output$y_train
+    train_indices <- sets_output$train_indices
+    valid_indices <- sets_output$valid_indices
+    folds <- sample(rep(1:k, length.out = nrow(train_df))) # makes sure that the same folds are used, just like we make sure that the same validation set is used.
+  }
+  else {
+    X <- train_input_list$X_train
+    Y <- train_input_list$y_train
+    train_indices <- train_input_list$train_indices
+    valid_indices <- train_input_list$valid_indices
+    folds <- train_input_list$folds
+  }
+  # Initialize common variables
+  fits <- list()
+  preds <- list()
+  valids <- list()
+  
+  # Iterate over each row in grid_df
+  for (i in 1:nrow(grid_df)) {
+    # Set up model_input
+    model_input <- list()
+    xname <- ifelse(model_f == "gbart", "x.train", "x")
+    yname <- ifelse(model_f == "gbart", "y.train", "y")
+    
+    if (!matrix) {
+      model_input$formula <- as.formula("y ~ .")
+    } 
+    
+    # Apply grid parameters to model_input
+    current_model_f <- model_f  # Default model function
+    for (tp in names(grid_df)) {
+      if (!all(is.na(grid_df[[tp]]))) {
+        if (tp == "mindev") {
+          model_input$control <- tree.control(nobs = length(train_df$y), mindev = grid_df[i, tp])
+        } else if (tp == "preds_used") {
+          model_input$formula <- as.formula(paste("y ~", grid_df[i, tp]))
+        } else if (tp == "submodel") {
+          current_model_f <- grid_df[i, tp]  # Override model function if 'submodel' is specified
+        } else if (tp != "thresh") {
+          model_input[[tp]] <- grid_df[i, tp]
+        }
+      }
+    }
+    # Get the threshold param if we have it specified and we are classifying. We don't pass this directly into the model fitting function, hence why it is not in the loop above
+    thresh <- if ("thresh" %in% names(grid_df) && !is.na(grid_df[i, "thresh"])) grid_df[i, "thresh"] else 0.5
+    
+    # Call validation function and store results
+    if (method == "cv") {
+      result <- cross_validate(thresh, current_model_f, X, Y, k, classify, train_df, folds, model_input, matrix, xname, yname)
+      error_col <- paste0("cv_", ifelse(classify, "misclass_rate", "mse"))
+    } else if (method == "v") {
+      result <- validate(thresh, current_model_f, X, Y, train_indices, valid_indices, classify, train_df, model_input, matrix, xname, yname)
+      error_col <- paste0("v_", ifelse(classify, "misclass_rate", "mse"))
+    } else {
+      stop("Invalid method. Choose 'cv' or 'v'.")
+    }
+    
+    # Store results in grid_df and lists
+    grid_df[[error_col]][i] <- result$error
+    fits[[i]] <- result$fits
+    preds[[i]] <- result$preds
+    valids[[i]] <- result$valids
+  }
+  
+  return(list(grid_df = grid_df, fits = fits, preds = preds, valids = valids))
+}
+
+
 ```
+
+
+
+
 
 
 
@@ -379,20 +454,64 @@ Look at results from best Model
 
 
 **Start with Classification Tree**
-```{r, eval=F}
+```{r}
 mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
 
-tree_grid <- expand.grid(mindev = mindev_values)
+tree_grid <- expand.grid(mindev = mindev_values, thresh = seq(0.4,0.6,0.05))
 #grid_results$tree_size <- NA
 #tree_grid <- data.frame(dummy = rep(NA,4))
 tree_grid
 ```
-```{r, eval=F} 
-tree_df_output <- validate(method = "cv")
+```{r} 
+tree_df_output <- grid_validate(grid_df = tree_grid,  method = "v", classify=T)
 tree_df <- tree_df_output$grid_df
 tree_df
 
 ```
+#### Analyse the best specification's predictions against the validation set
+
+```{r}
+get_best_spec <- function(grid_df = tree_df, grid_validation = tree_df_output) {
+  e_column <- grep("misclass|mse", colnames(tree_df), value = TRUE)
+  best_idx <- which.min(grid_df[[e_column]])
+  best_e <- grid_df[best_idx, e_column]
+  best_row <- grid_df[best_idx,]
+  best_preds <- grid_validation$preds[[best_idx]]
+  best_valids <- grid_validation$valids[[best_idx]]
+  return(list(preds=best_preds, valids=best_valids, error = best_e, row =best_row))
+}
+
+
+```
+
+
+
+```{r}
+graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
+  predictions_df <- data.frame(y = valids, yhat=preds)
+  if (cm) {
+    confusion_matrix <-
+    predictions_df |> 
+    conf_mat(truth = y, estimate = yhat)
+    print(confusion_matrix |> autoplot(type = "heatmap"))
+  }
+  if (scatter == T) {
+    if (classify) {
+      predictions_df$yhat <- as.numeric(predictions_df$yhat) - 1
+      predictions_df$y <- as.numeric(predictions_df$y) - 1
+    }
+    print(plot(predictions_df$yhat, predictions_df$y))
+    abline(0, 1)
+  }
+  error_col <- paste0(ifelse(classify, "misclass_rate", "mse"))
+  print(paste(error_col, ":", calculate_error(preds, valids, classify)))
+}
+graph_preds(get_best_spec()$preds, get_best_spec()$valids, cm=T,scatter=T)
+
+
+```
+
+
 
 ```{r}
 # Fit a tree
