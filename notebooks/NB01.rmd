@@ -36,11 +36,13 @@ library(rstudioapi) # to set the correct working directory
 library(ISLR) # to get all the data and models from ISLR to experiment
 library(gam) # to fit gams
 library(tree) # for tree fitting to guage the functional form of the data
-
+library(MASS) # for QDA and LDA
 
 # Plotting/ Visualisation
 library(ggplot2) # for maintainable plots with a lot of interactability
 library(yardstick) # for plotting an ROC curve
+
+
 ```
 
 ### Directories/Paths
@@ -219,27 +221,43 @@ Heart_models
 ```{r}
 get_predictions <- function(model, X_valid_fold, y_valid_fold, classify, formula, model_f, matrix, thresh) {
   
+  # Handle the matrix vs non-matrix input
   if (matrix) {
     valid_fold <- X_valid_fold
-  }
-  else {
+  } else {
     valid_fold <- data.frame(y = y_valid_fold, X_valid_fold)
   }
+  
+  # Classification predictions
   if (classify) {
     if (model_f == "tree") {
+      # For tree models (e.g., decision tree), assuming it's a binary classification
       prob_predictions <- predict(model, valid_fold)[, 2]
-    } else {
+    }
+    else if (model_f == "naiveBayes") {
+      # For Naive Bayes, type="raw" returns probabilities
+      prob_predictions <- predict(model, newdata = valid_fold, type = "raw")[, 2]  # Checking column 2 for second class
+    }
+    else if (model_f == "qda" | model_f == "lda") {
+      # For QDA and LDA, we extract posterior probabilities for the second class (usually "1" or "2")
+      prob_predictions <- predict(model, newdata = valid_fold, type = "response")$posterior[, 2]  # Assuming the second column is for class "1"
+    } 
+    else {
+      # Default case for other models (e.g., logistic regression)
       prob_predictions <- predict(model, valid_fold, type = "response")
     }
     
-    
+    # Apply threshold and convert to factor (binary classification)
     predictions <- as.factor(as.numeric(prob_predictions > thresh))
-  } else {
+  } 
+  else {
+    # If regression, just return predicted values
     predictions <- predict(model, valid_fold)
   }
   
   return(predictions)
 }
+
 
 
 calculate_error <- function(predictions, true_values, classify) {
@@ -369,7 +387,7 @@ grid_validate <- function(train_input_list = train_input, method = "cv", model_f
           model_input$control <- tree.control(nobs = length(train_df$y), mindev = grid_df[i, tp])
         } else if (tp == "preds_used") {
           model_input$formula <- as.formula(paste("y ~", grid_df[i, tp]))
-        } else if (tp == "submodel") {
+        } else if (tp == "sub_model") {
           current_model_f <- grid_df[i, tp]  # Override model function if 'submodel' is specified
         } else if (tp != "thresh") {
           model_input[[tp]] <- grid_df[i, tp]
@@ -403,6 +421,33 @@ grid_validate <- function(train_input_list = train_input, method = "cv", model_f
 
 ```
 
+#### Create a function that can plot how our validation or cross-validation error measures compare based on pairs of tuning parameters:
+```{r}
+plot_grid <- function(grid, val_measure = "v_mse", tp1 = "n_preds_used", tp2 = NA, logx = FALSE) {
+  best_model <- grid[which.min(grid[[val_measure]]), ]
+  
+  plot <- grid |>
+    ggplot(aes(x = .data[[tp1]])) +
+    geom_point(aes(y = .data[[val_measure]], color = if (!is.na(tp2)) as.factor(.data[[tp2]]) else NULL), size = 2, alpha = 0.5) +
+    geom_point(data = best_model, aes(x = .data[[tp1]], y = .data[[val_measure]]), 
+               color = "purple", shape = 16, size = 3) +
+    labs(
+      title = paste(val_measure, "vs.", tp1),
+      x = tp1,
+      y = val_measure
+    ) +
+    expand_limits(y = 0.9 * min(grid[[val_measure]])) +
+    theme_minimal()
+  
+  if (!is.na(tp2)) {
+    plot <- plot + scale_color_discrete(name = tp2)
+  }
+  if (logx) {
+    plot <- plot + scale_x_log10(breaks = scales::trans_breaks("log10", function(x) 10^x))
+  } 
+  print(plot)
+}
+```
 
 
 
@@ -611,7 +656,29 @@ cbind(higher_summary, medium_summary, lower_summary) |>
 
 ```
 
-As seen from the confusion matrices earlier, accuracy benefits the lower and not the higher threshold.
+As seen from the confusion matrices earlier, the threshold does not really seem to matter.
+
+**Move to GMCs (LDA, QDA and Naive Bayes)**
+```{r}
+library(e1071) # to fit a naive bayes GMC. Putting it earlier caused some problems, so I just put it here
+```
+
+```{r}
+
+gmc_grid <- expand.grid(sub_model = c("lda","qda", "naiveBayes"), thresh = seq(0.4,0.6,0.05))
+gmc_grid$sub_model <- as.character(gmc_grid$sub_model)
+gmc_grid
+```
+```{r}
+gmc_output <- grid_validate(grid_df = gmc_grid,  method = "v", classify=T)
+gmc_df <- gmc_output$grid_df
+gmc_df
+```
+
+```{r}
+plot_grid(gmc_df, val_measure = "v_misclass_rate", tp1 = "thresh", tp2 = "sub_model")
+```
+
 
 #### Analyse Results
 Look at results from best Model
