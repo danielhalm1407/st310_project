@@ -36,13 +36,14 @@ library(rstudioapi) # to set the correct working directory
 library(ISLR) # to get all the data and models from ISLR to experiment
 library(gam) # to fit gams
 library(tree) # for tree fitting to guage the functional form of the data
+library(randomForest) # for random forest fitting
 library(MASS) # for QDA and LDA
 library(e1071) # to fit a naive bayes GMC.
 
 # Plotting/ Visualisation
 library(ggplot2) # for maintainable plots with a lot of interactability
 library(yardstick) # for plotting an ROC curve
-
+library(iml) # To get PDPs from a random forest
 
 ```
 
@@ -279,8 +280,12 @@ get_predictions <- function(model, X_valid_fold, y_valid_fold, classify, formula
   # Classification predictions
   if (classify) {
     if (model_f == "tree") {
-      # For tree models (e.g., decision tree), assuming it's a binary classification
+      # For tree models (e.g., decision tree), with 2 indexing the prob of positive class
       prob_predictions <- predict(model, valid_fold)[, 2]
+    }
+    else if (model_f == "randomForest") {
+      # For random forest models (e.g., decision tree), assuming it's a binary classification
+      prob_predictions <- predict(model, valid_fold, type = "prob")[,2]
     }
     else if (model_f == "naiveBayes") {
       # For Naive Bayes, type="raw" returns probabilities
@@ -434,7 +439,7 @@ It is possible to input the validation set or validation folds from the start, o
 
 
 
-grid_validate <- function(train_input_list = train_input, method = "cv", model_f = "tree", grid_df, k = 5, frac = 0.6, matrix = FALSE, classify = FALSE, test_bal = 0.68, reshuffle = F) {
+grid_validate <- function(train_input_list = train_input, method = "cv", model_f = "tree", grid_df, k = 5, frac = 0.6, matrix = FALSE, classify = FALSE, test_bal = const_yhat_success, reshuffle = F) {
   train_df <- train_input_list$train_df
   if (reshuffle) {
     sets_output <- make_sets(df = train_df, frac = frac, classify = classify, test_bal = test_bal)
@@ -553,7 +558,8 @@ get_best_spec <- function(grid_df, grid_validation) {
   best_row <- grid_df[best_idx,]
   best_preds <- grid_validation$preds[[best_idx]]
   best_valids <- grid_validation$valids[[best_idx]]
-  return(list(preds=best_preds, valids=best_valids, error = best_e, row =best_row))
+  best_fits <- grid_validation$fits[[best_idx]]
+  return(list(preds=best_preds, valids=best_valids, fits = best_fits, error = best_e, row =best_row))
 }
 
 
@@ -814,6 +820,91 @@ best_spec_output <- get_best_spec(grid_df = gmc_df, grid_validation = gmc_output
 graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
 ```
 
+### Random Forest
+
+#### Validate/Cross-Validate Best Tuning Parameters Using In-Built Features
+
+```{r}
+
+
+thresh = 0.51  # Classification threshold
+
+# Fit a Random Forest model
+rf_fit <- randomForest(y ~ ., data = Heart_train_fold, ntree = 500, mtry = 3, importance = TRUE)
+
+# Store the probability predictions (the second column corresponds to the positive class probability)
+rf_fit_prob_preds <- predict(rf_fit, Heart_valid_fold, type = "prob")[,2]
+
+# Convert probabilities to class predictions using the threshold
+preds <- as.factor(as.numeric(rf_fit_prob_preds > thresh))
+valids <- Heart_valid_fold$y
+
+# Get the standard Bayesian classifier class predictions
+graph_preds(preds, valids, cm = TRUE)
+
+
+
+
+```
+#### Validate/Cross-Validate Best Tuning Parameters
+
+##### Create a Grid of Tuning Parameters
+```{r}
+#mtry_choice <- c(seq(1,ncol(Heart)-1,1))
+mtry_choice = c(1,2,3,4,5)
+grid_rf <- expand.grid(ntree = c(500), mtry = mtry_choice, thresh = seq(0.4,0.6,0.05), importance=F)
+grid_rf
+```
+
+##### Compare Prediction accuracy for each of the models
+```{r} 
+rf_df_output <- grid_validate(grid_df = grid_rf,  model_f = "randomForest", method = "v", classify=T)
+rf_df <- rf_df_output$grid_df
+```
+**Look at the Grid**
+```{r}
+rf_df
+```
+
+**Graph the Grid**
+
+```{r}
+plot_grid(rf_df, val_measure = "v_misclass_rate", tp1 = "mtry", tp2 = "thresh")
+```
+
+
+#### Analyse the best specification's predictions against the validation set
+
+
+
+```{r}
+best_spec_output <- get_best_spec(grid_df = rf_df, grid_validation = rf_df_output)
+graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
+```
+#### Use Best Model To Learn About Data
+
+##### Find Variable Importance
+```{r}
+best_spec_output$row
+
+rf_fit <- randomForest(y ~ ., data = Heart_train_fold, ntree = 500, mtry = best_spec_output$row$mtry, importance = TRUE)
+
+
+varImpPlot(rf_fit)
+varImpPlot(best_spec_output$fits)
+```
+##### Guage Functional Form of Conditional Probability using PDPs
+```{r}
+pred_rf <- Predictor$new(rf_fit)
+
+pdp_rf <- FeatureEffects$new(pred_rf, features = c("cp","ca", "chol", "trestbps"), method = "pdp+ice")
+
+plot(pdp_rf) 
+```
+
+```{r}
+Heart
+```
 
 ## Conclusion
 
