@@ -37,6 +37,7 @@ library(ISLR) # to get all the data and models from ISLR to experiment
 library(gam) # to fit gams
 library(tree) # for tree fitting to guage the functional form of the data
 library(MASS) # for QDA and LDA
+library(e1071) # to fit a naive bayes GMC.
 
 # Plotting/ Visualisation
 library(ggplot2) # for maintainable plots with a lot of interactability
@@ -90,10 +91,36 @@ Any eda and domain-specific research
 
 ### Set Up
 
-#### Set up separate training and validation sets when k-fold cross-validation takes too long
+#### Look at the Class Balance in Our Data
+
+
+```{r}
+# We need the training set to be balanced, yet the validation set to have 68% balance.
+outcome_counts_fold <- Heart |> count(y)
+outcome_counts_fold$proportion <- outcome_counts_fold$n / sum(outcome_counts_fold$n)
+const_yhat_success <- outcome_counts_fold$proportion[[2]]
+outcome_counts_fold
+```
+
+Nice, it seems rather balanced!
+
+```{r}
+const_yhat_success
+```
+
+
+#### Set up separate training and validation sets
+
+##### Define a function to create training and validation sets
+
+The below function creates training and validation sets or 'folds' in dataframe and matrix form, as well as returning the indices of the observations corresponding to these.
+
+Optionally, we can have the class balance in the validation set (called test_bal) be different to that in the training set. We set this to be the same in both training and validation sets, and equal to the positive class proportion in the original data, given that each set is sampled independently from the original data.
+
+
 ```{r}
 
-make_sets <- function(df, frac = 0.6, classify = F, test_bal = 0.68) {
+make_sets <- function(df, frac = 0.6, classify = F, test_bal = const_yhat_success) {
   train_indices <- sample(1:nrow(df), size = frac * nrow(df), replace = F)
   
   y_train <- df[, 1]
@@ -137,16 +164,19 @@ make_sets <- function(df, frac = 0.6, classify = F, test_bal = 0.68) {
 }
 ```
 
+##### Call the function that creates training and validation sets
 
 ```{r}
-# Get matrix versions of the full data
-X <- make_sets_output_1$X_train
-Y <- make_sets_output_1$y_train
+
 
 # Make training and validation sets for the whole data
 make_sets_output_1 <- make_sets(df=Heart )
 Heart_train_fold <- make_sets_output_1$train_fold
 Heart_valid_fold <- make_sets_output_1$valid_fold
+
+# Get matrix versions of the full data
+X <- make_sets_output_1$X_train
+Y <- make_sets_output_1$y_train
 
 # Make matrix versions of each of these
 Heart_X_train_fold <- make_sets_output_1$X_train_fold
@@ -158,8 +188,16 @@ Heart_y_valid_fold <- make_sets_output_1$y_valid_fold
 # Extract the indices used for training and validation for future use
 train_indices <- make_sets_output_1$train_indices
 valid_indices <- make_sets_output_1$valid_indices
+```
 
-# Create k folds if we want to use the same folds for cross validation for all of the model fitting procedures and all specifications for all model fitting procedures
+#### Create k folds for cross-validation 
+
+If we want to use the same folds for cross validation for all of the model fitting procedures and all specifications for all model fitting procedures.
+
+
+```{r}
+
+
 k <- 5
 folds <- sample(rep(1:k, length.out = nrow(Heart)))
 
@@ -168,28 +206,27 @@ train_input <- list(train_df = Heart, X_train = X, y_train = Y, train_indices=tr
 ```
 
 
-```{r}
-dim(Heart_X_valid_fold)
-length(Heart_y_valid_fold)
-data.frame(y = Heart_y_valid_fold, Heart_X_valid_fold)
-```
+
+#### Create A Dataframe to Store All of Our Model Types and the 'Best' Specifications for Each.
+
+For each model fitting procedure, we create a grid of tuning parameters and model inputs (including a choice of predictors and functional forms where applicable).
+
+We then iteratively fit all of these specifications and calculate the validation/cross-validation set accuracy, choosing the 'Best' model usually as that with the highest accuracy, or the simplest specification with a high enough accuracy.
+
+In our classification setting, this is the misclassification rate.
+
+We then store this specification (all the inputs we need to run this fit) and its accuracy in this aggregated table, repeating this for all model fitting procedures.
+
+In other words, each row corresponds to a model fitting procedure (e.g. GAM, tree, OLS) with each column giving some parameter or information about the specification that achieved the best accuracy given that model procedure.
+
+##### Create a function to make this dataframe
+
+This allows us to create the table above to store any number of tuning parameters and use any form of accuracy measure, in this case, we use the misclassification (misclass) rate,
+and 3 tuning parameters.
+
+In this table, sub-models and functional forms and combinations of predictors are also counted as tuning parameters, just for maintainability, although this is not strictly true.
 
 
-```{r, echo=F}
-n_preds <- (dim(Heart)[2]-1)
-print(paste("It seems that our data has", n_preds, "predictors"))
-```
-#### Look at the Class Balance in Our Data
-```{r}
-# We need the training set to be balanced, yet the validation set to have 68% balance.
-outcome_counts_fold <- Heart_valid_fold |> count(y)
-outcome_counts_fold$proportion <- outcome_counts_fold$n / sum(outcome_counts_fold$n)
-const_yhat_success <- outcome_counts_fold$proportion[[2]]
-outcome_counts_fold
-```
-
-Nice, it seems rather balanced!
-#### Create A Dataframe to Store All of Our Model Types and Misclass Estimates
 ```{r}
 gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
   df = data.frame(
@@ -209,14 +246,25 @@ gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
 
   return(df)
 }
-Heart_models <- gen_models_df(accuracy_measures = c("cv_misclass_rate"))
+Heart_models <- gen_models_df(accuracy_measures = c("misclass_rate"))
 
 Heart_models
 
 ```
+
+
 #### Define a set of functions that help to validate or cross-validate a grid of tuning parameters
 
 
+##### Define a Function that Generates Predictions
+
+Given any model fitting procedure (e.g. tree), a model fitted to that procedure (e.g. tree.fit fit to some training data), and any validation set, this function calculates the predicted outcome.
+
+Calculating predictions varies not only on:
+
+1. Whether we are using classification (in which case we get the conditional probabilities first, and then assign a class based on our thresholds), but also; 
+
+2. what model fitting procedure we are using, since the packages in R use different syntax. For example, some require an X matrix input only (without the outcome), and others have the conditional probabilities in different formats.
 
 ```{r}
 get_predictions <- function(model, X_valid_fold, y_valid_fold, classify, formula, model_f, matrix, thresh) {
@@ -258,7 +306,13 @@ get_predictions <- function(model, X_valid_fold, y_valid_fold, classify, formula
   return(predictions)
 }
 
+```
 
+##### Define a Function that Finds Prediction Accuracy
+
+This takes predictions as inputs and calculates the validation set mse or misclass rate accordingly.
+
+```{r}
 
 calculate_error <- function(predictions, true_values, classify) {
   if (classify) {
@@ -268,7 +322,16 @@ calculate_error <- function(predictions, true_values, classify) {
   }
 }
 
+```
 
+
+##### Define a Function that Cross-Validates a Specification
+
+This function takes a model fitting procedure and specification as an input, and then fits the model k times on k folds, using the previously defined functions to generate predictions and prediction accuracy for each fold.
+
+In turn, it stores the accuracy of these folds and calculates the mean of this accuracy across all k folds and stores it as its main output, corresponding to the k-validation-fold accuracy.
+
+```{r}
 
 cross_validate <- function(thresh, model_f, X, Y, k, classify, train_df, folds, model_input, matrix, xname, yname) {
   e_folds <- c()  # Store error metrics for each fold
@@ -317,7 +380,16 @@ cross_validate <- function(thresh, model_f, X, Y, k, classify, train_df, folds, 
 }
 
 
+```
 
+
+##### Define a Function that Cross-Validates a Specification
+
+This function takes a model fitting procedure and specification as an input, and then fits the model once on a single validation set, using the previously defined functions to generate predictions and prediction accuracy on this set.
+
+In turn, it stores this accuracy as its main output, corresponding to the validation set accuracy.
+
+```{r}
 
 validate <- function(thresh, model_f, X, Y, train_indices, valid_indices, classify, train_df, model_input, matrix, xname, yname) {
   
@@ -342,7 +414,23 @@ validate <- function(thresh, model_f, X, Y, train_indices, valid_indices, classi
   return(list(fits = model, preds = predictions, valids = Y[valid_indices], error = fold_error))
 }
 
+```
 
+##### Define a Function that Validates or Cross Validates a Grid of Specifications
+
+This function takes a model fitting procedure and a grid where each row is a specification as an input, and then finds the validation set or k-fold-validation accuracy, using the previous functions to fit the model, calculate predictions and in turn their accuracy.
+
+In turn, it stores this accuracy for each specification under a new column of this input grid as its main output.
+
+From the model output is also possible to retrieve the model fit, the predictions and the validation sets for each time a model (model fitting procedure and specification/tuning parameters combination) is fit, in case we want to go back to our results.
+
+Depending on interpretability and time, one can choose whether to validate or cross-validate.
+
+It is possible to input the validation set or validation folds from the start, or reshuffle (create these again) each time the function is called.
+
+
+
+```{r}
 
 
 
@@ -421,7 +509,10 @@ grid_validate <- function(train_input_list = train_input, method = "cv", model_f
 
 ```
 
-#### Create a function that can plot how our validation or cross-validation error measures compare based on pairs of tuning parameters:
+#### Create a Function that can plot how our validation or cross-validation error measures compare based on Combinations of tuning parameters.
+
+This takes a specification grid output from grid_validate() above as an input, plotting how validation accuracy/error changes based on up to two dimensions.
+
 ```{r}
 plot_grid <- function(grid, val_measure = "v_mse", tp1 = "n_preds_used", tp2 = NA, logx = FALSE) {
   best_model <- grid[which.min(grid[[val_measure]]), ]
@@ -450,7 +541,52 @@ plot_grid <- function(grid, val_measure = "v_mse", tp1 = "n_preds_used", tp2 = N
 ```
 
 
+#### Create a function that retrieves the best specification 
 
+In other words, this retreives the corresponding sub-model, regressors, functional forms and tuning parameters that give us the best validation set accuracy from a grid (like that output from grid_validate()) where each row is some different specification.
+
+```{r}
+get_best_spec <- function(grid_df, grid_validation) {
+  e_column <- grep("misclass|mse", colnames(tree_df), value = TRUE)
+  best_idx <- which.min(grid_df[[e_column]])
+  best_e <- grid_df[best_idx, e_column]
+  best_row <- grid_df[best_idx,]
+  best_preds <- grid_validation$preds[[best_idx]]
+  best_valids <- grid_validation$valids[[best_idx]]
+  return(list(preds=best_preds, valids=best_valids, error = best_e, row =best_row))
+}
+
+
+```
+
+#### Create a function that visually compares predicted values to validation values
+
+This is set up to work both for continuous outcomes (preds against valids scatter plot) and a categorical outcome (confusion matrix)
+
+```{r}
+graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
+  predictions_df <- data.frame(y = valids, yhat=preds)
+  if (cm) {
+    confusion_matrix <-
+    predictions_df |> 
+    conf_mat(truth = y, estimate = yhat)
+    print(confusion_matrix |> autoplot(type = "heatmap"))
+  }
+  if (scatter == T) {
+    if (classify) {
+      predictions_df$yhat <- as.numeric(predictions_df$yhat) - 1
+      predictions_df$y <- as.numeric(predictions_df$y) - 1
+    }
+    print(plot(predictions_df$yhat, predictions_df$y))
+    abline(0, 1)
+  }
+  error_col <- paste0(ifelse(classify, "misclass_rate", "mse"))
+  print(paste(error_col, ":", calculate_error(preds, valids, classify)))
+}
+
+
+
+```
 
 
 
@@ -493,70 +629,51 @@ Look at results from best Model
 
 
 
-### Predictively Accurate Model: Classification Random Forest
+### Predictively Accurate Model: Classification Random Forest?
+
+
+
+
+### Classification Tree
 
 #### Validate/Cross-Validate Best Tuning Parameters
 
-
-**Start with Classification Tree**
+##### Create a Grid of Tuning Parameters
 ```{r}
 mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
 
-tree_grid <- expand.grid(mindev = mindev_values, thresh = seq(0.4,0.6,0.05))
+tree_grid <- expand.grid(mindev = mindev_values, thresh = seq(0.4,0.6,0.02))
 #grid_results$tree_size <- NA
 #tree_grid <- data.frame(dummy = rep(NA,4))
 tree_grid
 ```
+
+##### Compare Prediction accuracy for each of the models
 ```{r} 
 tree_df_output <- grid_validate(grid_df = tree_grid,  method = "v", classify=T)
 tree_df <- tree_df_output$grid_df
-tree_df
-
 ```
+**Look at the Grid**
+```{r}
+tree_df
+```
+
+**Graph the Grid**
+
+```{r}
+plot_grid(tree_df, val_measure = "v_misclass_rate", tp1 = "mindev", tp2 = "thresh")
+```
+
+
 #### Analyse the best specification's predictions against the validation set
 
-```{r}
-get_best_spec <- function(grid_df = tree_df, grid_validation = tree_df_output) {
-  e_column <- grep("misclass|mse", colnames(tree_df), value = TRUE)
-  best_idx <- which.min(grid_df[[e_column]])
-  best_e <- grid_df[best_idx, e_column]
-  best_row <- grid_df[best_idx,]
-  best_preds <- grid_validation$preds[[best_idx]]
-  best_valids <- grid_validation$valids[[best_idx]]
-  return(list(preds=best_preds, valids=best_valids, error = best_e, row =best_row))
-}
-
-
-```
-
 
 
 ```{r}
-graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
-  predictions_df <- data.frame(y = valids, yhat=preds)
-  if (cm) {
-    confusion_matrix <-
-    predictions_df |> 
-    conf_mat(truth = y, estimate = yhat)
-    print(confusion_matrix |> autoplot(type = "heatmap"))
-  }
-  if (scatter == T) {
-    if (classify) {
-      predictions_df$yhat <- as.numeric(predictions_df$yhat) - 1
-      predictions_df$y <- as.numeric(predictions_df$y) - 1
-    }
-    print(plot(predictions_df$yhat, predictions_df$y))
-    abline(0, 1)
-  }
-  error_col <- paste0(ifelse(classify, "misclass_rate", "mse"))
-  print(paste(error_col, ":", calculate_error(preds, valids, classify)))
-}
-graph_preds(get_best_spec()$preds, get_best_spec()$valids, cm=T,scatter=T)
-
-
+best_spec_output <- get_best_spec(grid_df = tree_df, grid_validation = tree_df_output)
+graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
 ```
-
-
+#### Validate/Cross-Validate Best Tuning Parameters Using In-Built Features
 
 ```{r}
 # Fit a tree
@@ -572,14 +689,17 @@ plot(preds, as.numeric(Heart_valid_fold$y)-1)
 
 ```
 
-#### Cross-Validate the Best Pruning Coefficient, K (Penalty for number of terminal nodes) and overall tree size.
+##### Cross-Validate the Best Pruning Coefficient, K (Penalty for number of terminal nodes) and overall tree size.
 ```{r}
 cv.tree_fit <- cv.tree(tree_fit, FUN = prune.misclass)
 par(mfrow = c(1, 2))
 plot(cv.tree_fit$size, cv.tree_fit$dev, type = "b")
 plot(cv.tree_fit$k, cv.tree_fit$dev, type = "b")
 ```
-#### Analyse the confusion matrices for the tree model.
+#### Analyse the Accuracy
+
+
+##### Compare confusion matrices for the tree model.
 ```{r}
 
 tree_fit_predictions <-data.frame(
@@ -593,7 +713,7 @@ tree_fit_predictions |> pull(.fitted) |> mean() # same as mean(tree_fit_predicti
 paste("Misclass Rate:")
 sum((tree_fit_predictions$y!=tree_fit_predictions$yhat)) / nrow(tree_fit_predictions)
 ```
-**Look at ROC Curve to guage Trade-Off**
+##### Look at ROC Curve to guage Trade-Off
 ```{r, eval=F}
 tree_fit_predictions |>
   roc_curve(truth = y, .fitted,
@@ -601,7 +721,7 @@ tree_fit_predictions |>
   autoplot()
 # the 'truth' is just the training y here, not the testing y, which we do not have, nor a validation set.
 ```
-**Classify at different thresholds.**
+#### Classify at different thresholds.
 
 ```{r, eval=F}
 higher_cutoff <- const_yhat_success + .15
@@ -626,19 +746,19 @@ confusion_matrix_lower <-
   conf_mat(truth = y, estimate = yhat)
 ```
 
-**1. Balanced Confusion Matrix**
+##### 1. Balanced Confusion Matrix
 ```{r, eval=F}
 confusion_matrix_medium |> autoplot(type = "heatmap")
 ```
-**3. Low Cut-Off Confusion Matrix**
+##### 3. Low Cut-Off Confusion Matrix
 ```{r, eval=F}
 confusion_matrix_lower |> autoplot(type = "heatmap")
 ```
-**3. High Cut-Off Confusion Matrix**
+##### 3. High Cut-Off Confusion Matrix
 ```{r, eval=F}
 confusion_matrix_higher |> autoplot(type = "heatmap")
 ```
-**Comparing key sum stats:**
+##### Comparing key sum stats:
 
 ```{r, eval=F}
 higher_summary <- summary(confusion_matrix_higher) |>
@@ -658,30 +778,41 @@ cbind(higher_summary, medium_summary, lower_summary) |>
 
 As seen from the confusion matrices earlier, the threshold does not really seem to matter.
 
-**Move to GMCs (LDA, QDA and Naive Bayes)**
-```{r}
-library(e1071) # to fit a naive bayes GMC. Putting it earlier caused some problems, so I just put it here
-```
+### Generative Models for Classification (GMCs: LDA, QDA and Naive Bayes)**
+
+
+##### Create a Grid of Tuning Parameters
 
 ```{r}
 
-gmc_grid <- expand.grid(sub_model = c("lda","qda", "naiveBayes"), thresh = seq(0.4,0.6,0.05))
+gmc_grid <- expand.grid(sub_model = c("lda","qda", "naiveBayes"), thresh = seq(0.4,0.6,0.02))
 gmc_grid$sub_model <- as.character(gmc_grid$sub_model)
 gmc_grid
 ```
+
+##### Compare Prediction accuracy for each of the models
+
+**Look at the Grid**
 ```{r}
 gmc_output <- grid_validate(grid_df = gmc_grid,  method = "v", classify=T)
 gmc_df <- gmc_output$grid_df
 gmc_df
 ```
+**Graph the Grid**
 
 ```{r}
 plot_grid(gmc_df, val_measure = "v_misclass_rate", tp1 = "thresh", tp2 = "sub_model")
 ```
 
 
+
+
 #### Analyse Results
-Look at results from best Model
+
+```{r}
+best_spec_output <- get_best_spec(grid_df = gmc_df, grid_validation = gmc_output)
+graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
+```
 
 
 ## Conclusion
