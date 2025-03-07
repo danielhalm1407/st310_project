@@ -31,12 +31,14 @@ library(dplyr) # for filtering and sorting to be easier.
 library(rstudioapi) # to set the correct working directory
 
 
+
 # Fitting Models
 #library(tidyverse)
 library(ISLR) # to get all the data and models from ISLR to experiment
 library(gam) # to fit gams
 library(tree) # for tree fitting to guage the functional form of the data
 library(randomForest) # for random forest fitting
+library(ranger) # for random forest fitting
 library(MASS) # for QDA and LDA
 library(e1071) # to fit a naive bayes GMC.
 
@@ -45,6 +47,15 @@ library(ggplot2) # for maintainable plots with a lot of interactability
 library(yardstick) # for plotting an ROC curve
 library(iml) # To get PDPs from a random forest
 
+# Easier Analysis
+library(tidymodels)
+
+# Resolve package conflicts (basically avoid having to us dplyr::select all the time)
+library(conflicted)
+
+conflict_prefer("select", "dplyr")
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(yardstick::accuracy)
 ```
 
 ### Directories/Paths
@@ -190,6 +201,22 @@ Heart_y_valid_fold <- make_sets_output_1$y_valid_fold
 train_indices <- make_sets_output_1$train_indices
 valid_indices <- make_sets_output_1$valid_indices
 ```
+
+##### Alternately, Use the Tidyverse package
+```{r}
+Heart_split <- initial_split(Heart, prop = 0.6)
+Heart_train <- Heart_split %>% training()
+Heart_valid <- Heart_split %>% testing()
+Heart_valid %>% glimpse()
+```
+**Inspect the data**
+```{r}
+Heart_split %>%
+  training() %>%
+  glimpse()
+```
+
+
 
 #### Create k folds for cross-validation 
 
@@ -895,7 +922,7 @@ varImpPlot(best_spec_output$fits)
 ```
 ##### Guage Functional Form of Conditional Probability using PDPs
 ```{r}
-pred_rf <- Predictor$new(rf_fit)
+pred_rf <- Predictor$new(best_spec_output$fits)
 
 pdp_rf <- FeatureEffects$new(pred_rf, features = c("cp","ca", "chol", "trestbps"), method = "pdp+ice")
 
@@ -905,6 +932,107 @@ plot(pdp_rf)
 ```{r}
 Heart
 ```
+
+#### Validate/Cross-Validate Best Tuning Parameters using Tidymodels
+
+```{r}
+ranger_fit <- rand_forest(trees = 100, mode = "classification") %>%
+  set_engine("ranger") %>%
+  fit(y ~ ., data = Heart_train)
+rf_fit <- rand_forest(trees = 100, mode = "classification") %>%
+  set_engine("randomForest") %>%
+  fit(y ~ ., data = Heart_train)
+```
+**Check ranger accuracy**
+```{r}
+ranger_fit %>%
+  predict(Heart_valid) %>%
+  bind_cols(Heart_valid) %>%
+  metrics(truth = y, estimate = .pred_class)
+```
+**Check randomForest accuracy**
+
+```{r}
+rf_fit %>%
+  predict(Heart_valid) %>%
+  bind_cols(Heart_valid) %>%
+  metrics(truth = y, estimate = .pred_class)
+```
+
+##### Compare choice probabilities
+
+```{r}
+Heart_probs <- ranger_fit %>%
+  predict(Heart_valid, type = "prob") %>% 
+  bind_cols(Heart_valid)
+Heart_probs
+```
+```{r}
+Heart_probs%>%
+  gain_curve(y, .pred_0) %>%
+  autoplot()
+```
+
+```{r}
+Heart_probs%>%
+  roc_curve(y, .pred_0) %>%
+  autoplot()
+```
+
+#### All in One Go
+```{r}
+
+predict(ranger_fit, Heart_valid, type = "prob") %>%
+  bind_cols(predict(ranger_fit, Heart_valid)) %>%
+  bind_cols(select(Heart_valid, y)) %>%
+  metrics(y, .pred_1, estimate = .pred_class)
+
+```
+
+#### Do the Validation itself
+```{r}
+# Create 10-fold cross-validation
+cv_folds <- vfold_cv(Heart_valid, v = 5, strata = y)
+
+# Define a tunable model (mtry is tuned, trees is fixed at 500)
+ranger_spec <- rand_forest(mtry = tune(), trees = tune(), mode = "classification") %>%
+  set_engine("ranger")
+
+# Create a workflow
+ranger_wf <- workflow() %>%
+  add_model(ranger_spec) %>%
+  add_formula(y ~ .)
+
+# Create a grid for mtry (1 to 6)
+mtry_grid <- tibble(mtry = rep(1:6,2), trees = c(rep(100,6),rep(200,6)))
+
+# Tune mtry using grid search
+tune_results <- tune_grid(
+  ranger_wf,
+  resamples = cv_folds,
+  grid = mtry_grid,
+  metrics = metric_set(accuracy, roc_auc)
+)
+
+
+# Get grid of accuracy depending on choice of mtry
+param_grid <- tune_results %>%
+  collect_metrics() %>%  # Extract all metrics
+  filter(.metric == "accuracy") %>%  # Focus only on accuracy
+  mutate(cv_misclass_rate = 1 - mean) %>% # Create new column for misclass rate
+  mutate(ntree = 500)
+param_grid
+
+```
+```{r}
+plot_grid(param_grid, val_measure = "cv_misclass_rate", tp1 = "mtry", tp2 = "trees")
+```
+
+
+
+
+
+
 
 ## Conclusion
 
