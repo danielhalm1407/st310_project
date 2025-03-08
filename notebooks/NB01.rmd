@@ -46,9 +46,12 @@ library(e1071) # to fit a naive bayes GMC.
 library(ggplot2) # for maintainable plots with a lot of interactability
 library(yardstick) # for plotting an ROC curve
 library(iml) # To get PDPs from a random forest
+library(GGally) # to make various two-way plots
 
 # Easier Analysis
-library(tidymodels)
+library(tidymodels) # Allows easy model fitting and multi-parameter tuning
+library(purrr) # So that I can iterate over custom thresholds to assign class
+library(rsample) # to allow parameter tuning using tidymodels
 
 # Resolve package conflicts (basically avoid having to us dplyr::select all the time)
 library(conflicted)
@@ -56,6 +59,13 @@ library(conflicted)
 conflict_prefer("select", "dplyr")
 conflicts_prefer(dplyr::filter)
 conflicts_prefer(yardstick::accuracy)
+conflicts_prefer(base::as.matrix)
+conflicts_prefer(tree::tree)
+conflicts_prefer(plyr::id)
+conflicts_prefer(dplyr::rename)
+conflicts_prefer(e1071::tune)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::count)
 ```
 
 ### Directories/Paths
@@ -88,6 +98,9 @@ Heart <- Heart[, c(ncol(Heart), 1:(ncol(Heart) - 1))]
 Heart_non_fctr <- Heart
 Heart$y <- factor(Heart$y)
 
+# Get number of predictors/features
+n_preds <- sum(names(Heart) != "y")
+
 head(Heart)
 names(Heart)
 ```
@@ -96,8 +109,33 @@ Any cleaning we have to do
 ### Exploratory Data Analysis (EDA)
 Any eda and domain-specific research
 
+#### Look at joint distribution of predictors against each other and the outcome
+
+```{r}
+Heart[,1:5] |>
+  ggpairs(progress = F)
+```
+
+```{r}
+for (i in seq(2,n_preds,3)) {
+  plot <- ggpairs(
+    Heart[, c(i:(min(n_preds,i + 2)), 1)], 
+    progress = FALSE
+  ) + 
+    theme_minimal()
+  
+  print(plot)
+}
+```
+
+Note in the above that the distribution of most of the integer variables appear to have a discrete gaussian/bell-curve type distribution within each class (with the exception of trestbps (resting blood pressure)). 
+
+Moreover, the distributions for both integer and factor variables can be distinct conditional on each class.Where the distributions are conditionally gaussian, this implies that both the mean and covariance for each class is different for each class, possibly motivating a QDA.
 
 
+However, this is not precisely a normal (conditional on y), limiting the possible usefulness of QDA as a model fitting procedure.
+
+Naive bayes also appears a dud, as we often observe high correlations between the features/predictors across both classes, and naturally this is likely to extend to high correlations within class as well. Therefore, we cannot make the necessary argument that the predictors are independent within a given class.
 
 ## Model Fitting
 
@@ -204,18 +242,20 @@ valid_indices <- make_sets_output_1$valid_indices
 
 ##### Alternately, Use the Tidyverse package
 ```{r}
-Heart_split <- initial_split(Heart, prop = 0.6)
+Heart_split <- initial_split(Heart, prop = 0.7)
 Heart_train <- Heart_split %>% training()
 Heart_valid <- Heart_split %>% testing()
-Heart_valid %>% glimpse()
-```
-**Inspect the data**
-```{r}
-Heart_split %>%
-  training() %>%
-  glimpse()
-```
 
+```
+**Inspect the training data**
+
+```{r, eval = FALSE}
+Heart_train
+```
+**Inspect the validation data**
+```{r, eval= F}
+Heart_valid
+```
 
 
 #### Create k folds for cross-validation 
@@ -920,6 +960,11 @@ rf_fit <- randomForest(y ~ ., data = Heart_train_fold, ntree = 500, mtry = best_
 varImpPlot(rf_fit)
 varImpPlot(best_spec_output$fits)
 ```
+```{r}
+
+```
+
+
 ##### Guage Functional Form of Conditional Probability using PDPs
 ```{r}
 pred_rf <- Predictor$new(best_spec_output$fits)
@@ -933,7 +978,7 @@ plot(pdp_rf)
 Heart
 ```
 
-#### Validate/Cross-Validate Best Tuning Parameters using Tidymodels
+#### Tidymodels Exploration
 
 ```{r}
 ranger_fit <- rand_forest(trees = 100, mode = "classification") %>%
@@ -982,38 +1027,68 @@ Heart_probs%>%
 #### All in One Go
 ```{r}
 
-predict(ranger_fit, Heart_valid, type = "prob") %>%
-  bind_cols(predict(ranger_fit, Heart_valid)) %>%
-  bind_cols(select(Heart_valid, y)) %>%
-  metrics(y, .pred_1, estimate = .pred_class)
+predict(ranger_fit, Heart_valid, type = "prob") %>% # add the predicted probs
+  bind_cols(predict(ranger_fit, Heart_valid)) %>% # add the predicted class
+  bind_cols(select(Heart_valid, y)) %>% # add the class in the validation set
+  metrics(y, .pred_1, estimate = .pred_class) # calculate accuracy (correct classification rate of the +ve class)
 
 ```
 
-#### Do the Validation itself
+#### Validate/Cross-Validate Best Tuning Parameters using Tidymodels
+
+##### Cross Validate
+
+
 ```{r}
-# Create 10-fold cross-validation
+# Set up the folds for 5 fold Cross-validation
 cv_folds <- vfold_cv(Heart_valid, v = 5, strata = y)
 
 # Define a tunable model (mtry is tuned, trees is fixed at 500)
 ranger_spec <- rand_forest(mtry = tune(), trees = tune(), mode = "classification") %>%
-  set_engine("ranger")
+  set_engine("ranger", probability = TRUE)
 
 # Create a workflow
 ranger_wf <- workflow() %>%
   add_model(ranger_spec) %>%
   add_formula(y ~ .)
 
-# Create a grid for mtry (1 to 6)
-mtry_grid <- tibble(mtry = rep(1:6,2), trees = c(rep(100,6),rep(200,6)))
+# Create a tuning grid
+tuning_grid <- expand.grid(
+  mtry = 1:6,
+  trees = c(500)
+)
 
-# Tune mtry using grid search
+# Run grid search with predictions saved
 tune_results <- tune_grid(
   ranger_wf,
   resamples = cv_folds,
-  grid = mtry_grid,
-  metrics = metric_set(accuracy, roc_auc)
+  grid = tuning_grid,
+  metrics = metric_set(accuracy, roc_auc),
+  control = control_grid(save_pred = TRUE)  # <-- Save predictions!
 )
 
+
+```
+```{r}
+# Extract probability predictions
+predictions <- collect_predictions(tune_results)
+
+# View first few rows
+predictions
+```
+
+
+
+```{r}
+names(validation_split)
+validation_split$train_id
+names(validation_rset)
+validation_rset
+```
+
+
+##### Compare Prediction accuracy for each of the models
+```{r}
 
 # Get grid of accuracy depending on choice of mtry
 param_grid <- tune_results %>%
@@ -1021,15 +1096,108 @@ param_grid <- tune_results %>%
   filter(.metric == "accuracy") %>%  # Focus only on accuracy
   mutate(cv_misclass_rate = 1 - mean) %>% # Create new column for misclass rate
   mutate(ntree = 500)
-param_grid
+
 
 ```
+**Look at the Grid**
+```{r}
+param_grid
+```
+**Look at the Plot**
 ```{r}
 plot_grid(param_grid, val_measure = "cv_misclass_rate", tp1 = "mtry", tp2 = "trees")
 ```
 
 
 
+##### Use Validation Set Approach to get best tuning Parameters
+
+```{r}
+# Set up a new tuning grid with a thresh value that we can change
+tuning_grid2 <- expand.grid(
+  mtry = 1:6,
+  trees = c(500),
+  thresh = c(0.4, 0.5),
+  formula = as.character(c("y ~ ca + oldpeak + thalach + cp + thal +trestbps + chol"))
+)
+tuning_grid2$formula = as.character(tuning_grid2$formula)
+tuning_grid2
+#as.formula(tuning_grid2$formula[2])
+```
+
+
+```{r}
+
+
+
+grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_spec) {
+  # Initialize empty data frames to store results and predictions
+  results <- data.frame()  # Changed to data.frame
+  all_preds_df <- data.frame()  # Changed to data.frame
+  
+  # Iterate over each combination of hyperparameters in the tuning grid
+  for(i in 1:nrow(tuning_grid)) {
+    
+    # Extract current combination of mtry, trees, and other tuning parameters
+    tuning_params <- tuning_grid[i, ]
+    
+    # Dynamically update the model_spec with the current hyperparameters
+    model_spec_updated <- rand_forest(mtry = tuning_params$mtry, 
+                                      trees = tuning_params$trees, 
+                                      mode = "classification") %>%
+      set_engine("randomForest", probability = TRUE)
+    
+    # Create a workflow with the current hyperparameters
+    current_wf <- workflow() %>%
+      add_model(model_spec_updated) %>%
+      add_formula(as.formula(tuning_params$formula))
+    
+    # Fit the model on the training data
+    model_fit <- fit(current_wf, data = train_data)
+    #model_fit <- model_spec_updated %>% fit(y ~ ., data = train_data)
+    
+    
+    # Predict probabilities on the validation set
+    prob_predictions <- predict(model_fit, valid_data, type = "prob")$.pred_1
+    
+    predictions <- as.factor(as.numeric(prob_predictions > thresh))
+    
+    error <- mean(predictions != valid_data$y)
+    
+    # Store results with hyperparameters and validation accuracy
+    results <- rbind(results, data.frame(mtry = tuning_params$mtry,
+                                         trees = tuning_params$trees,
+                                         misclass_rate = error))
+    
+    # Create a table for this combination of hyperparameters and append predictions
+    preds_df <- data.frame(preds = predictions) %>%
+      bind_cols(valid_data %>% select(y)) %>%
+      mutate(spec_no = i,
+             mtry = tuning_params$mtry, 
+             trees = tuning_params$trees)
+    
+    # Append to all_predictions data frame
+    all_preds_df <- rbind(all_preds_df, preds_df)
+  }
+  
+  # Return both the results table and the predictions table as a list
+  return(list(
+    results = results,
+    preds = all_preds_df
+  ))
+}
+
+
+
+rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid2, ranger_spec)
+rf_output$results
+check_preds <- rf_output$preds[rf_output$preds$spec_no==1,]
+check_preds
+```
+
+```{r}
+graph_preds(check_preds$preds, check_preds$y, cm=T)
+```
 
 
 
