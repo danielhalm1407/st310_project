@@ -1,0 +1,228 @@
+---
+title: "Untitled"
+output: html_document
+date: "2025-03-10"
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(caret)
+library(glmnet)
+library(ggplot2)
+```
+
+We begin by loading our dataset, heart.csv, saving it as a dataframe called heart. We then set a seed for random processes, to ensure a level of reproducbility. The sex variable is then recoded for better interpretability, with "0" recoded to "Female" and "1" to "Male". The dataset is then split into training and testing sets using a 70/30 ratio.
+
+```{r}
+# Dataset is loaded and saved as heart
+heart <- read.csv("heart.csv")
+head(heart)
+
+# Set seed for reproduciability 
+set.seed(200)
+
+# Sex recoded for greater interpretability 
+heart <- heart %>%
+  mutate(sex_factor = recode(sex,
+                             "0" = "Female",
+                             "1" = "Male"))
+
+# Create a 70/30 split between training and testing data set
+split_index <- createDataPartition(heart$target, p = 0.7, list = FALSE)
+train_data <- heart[split_index, ]
+test_data <- heart[-split_index, ]
+```
+
+Next, we want to identify the most influential quantitative and qualitative predictors.
+
+For our quantitative predictors such as age, thalach and oldpeak, we seeked to calculate the correlation of the predictors with the target. The correlations are then rearranged from most to least influential - the most influential numeric variable was identified as oldpeak.
+
+For our qualitative predictors such as sex_factor, cp and thal, we decided to look at a logistic regression model to assess the significance of our categorical predictors.The p-values dervied from the model summary are then sorted from most significant to least significant - the most influential categorical varibale was identified as cp.
+
+```{r}
+# Most influential quantitative variable determined via looking at correlations
+heart_Correlations <- train_data %>%
+  select(age, thalach, ca, oldpeak, trestbps, chol, target) %>%
+  cor() %>%
+  as.data.frame() %>%
+  select(target) %>%
+  arrange(desc(abs(target)))
+heart_Correlations # most highly correlated is oldpeak
+
+# Most influential qualitative variable determine via looking at a logistic model
+glm_categoricals <- glm(target ~ ., data = train_data %>% select(c(sex_factor, cp, fbs, restecg, exang, slope, thal), target), family = binomial)
+sort(summary(glm_categoricals)$coefficients[,4]) # most significant is cp
+```
+
+Thus, our interpretable logistic model is built utilising oldpeak, the numerical variable with the highest correlation to the target, and cp, the most significant cateogrical predictor. The summary function highlights that both predictors are highly significant when compared to our target.
+
+```{r}
+## Task 1: Interpretable model - taking the most highly correlated numerical predictor and the most significant categorical predictor
+glm1 <- glm(target ~ cp + oldpeak, data = train_data, family = binomial)
+summary(glm1)
+```
+
+We then work to identify the best pair of predictors which would minismise the missclassification rate using cross-validation.
+
+We first recode the target variable to ensure smooth running of our logistic model. All predictors are listed and a logistic model is fitted using all these predictors to establish a baseline model. This sets the scene for comparison of predictor pairs to find the optimal pair.
+
+```{r}
+## Task 4: For loop to see which two predictors give the best cross-validation misclassification rate
+train_data$target <- as.factor(train_data$target) # recoding target to be categorical
+
+predictors <- c("age", "thalach", "ca", "oldpeak", "trestbps", "chol",
+                "cp", "slope", "thal", "sex_factor", "exang", "restecg", "fbs") 
+
+glm_full <- glm(target ~ ., data = train_data %>% select(all_of(predictors), target), family = "binomial") # logistic model fit on all predictors
+```
+
+Lasso regression is utilised to ensure that the most important predictors are selected. This is done by applying an L1 penalty that aims to shrink the less significant coefficients to zero. The optimal penalty parameter is best determined via cross-validation. The non-zero coefficients are subsequrntly extracted to help identify the selected predictors and validated to ensure existence within the data set. 
+
+
+We then generate all the potential pairs of predictors.
+
+```{r}
+# Use Lasso to select predictors
+x <- model.matrix(target ~ ., data = train_data %>% select(all_of(predictors), target))[, -1]
+y <- train_data$target
+lasso_model <- cv.glmnet(x, y, family = "binomial", alpha = 1)
+best_lambda <- lasso_model$lambda.min
+lasso_coeffs <- coef(lasso_model, s = best_lambda) 
+
+selected_predictors <- rownames(lasso_coeffs)[lasso_coeffs[, 1] != 0][-1] # checking if predictors exist in dataset
+selected_predictors <- intersect(selected_predictors, colnames(train_data)) 
+selected_predictors # predictors ranked before the for loop
+
+predictor_pairs <- combn(selected_predictors, 2, simplify = FALSE) # all predictor combinations
+
+results <- data.frame(Predictor1 = character(),
+                      Predictor2 = character(),
+                      MisclassificationRate = numeric()) # predictor combos stored
+
+cv_control <- trainControl(method = "cv", number = 10) # cross-validation set up
+
+```
+
+We deploy a for loop to go through all potential pairs of predictors. This helps us identify which pair has the lowest missclassification rate. We train the model for each pair using 10-fold cross-validation. We calculate the missclassification rate as 1- accuracy rate - the results for each pair is stored within the results data frame.
+
+The pairs of predictors are sorted from lowest to highest missclassification rate - the top-performing oaur is ca and oldpeak
+
+```{r}
+for (pair in predictor_pairs) { # for loop to find 2 most important predictors
+  pair <- unlist(pair)
+  
+  selected_data <- train_data %>% select(all_of(pair), target) # subset to ensure only looking at predictor pair and target
+  
+# Cross-validation of logistic model
+  model <- tryCatch(
+    {
+      train(target ~ ., data = selected_data, 
+            method = "glm", 
+            family = "binomial",
+            trControl = cv_control)
+    },
+    error = function(e) {
+      message("Error in model training for predictors: ", paste(pair, collapse = ", "))
+      return(NULL)
+    }
+  )
+  
+  if (!is.null(model) && !is.null(model$results$Accuracy)) { # checking if model trained correctly
+    accuracy <- max(model$results$Accuracy, na.rm = TRUE)
+  } else {
+    accuracy <- NA  # for failed models
+  }
+  
+  misclassification_rate <- 1 - accuracy # misclassification calculated
+  
+  results <- rbind(results, 
+                   data.frame(Predictor1 = pair[1], 
+                              Predictor2 = pair[2], 
+                              MisclassificationRate = misclassification_rate)) # store results
+}
+
+best_pairs <- results[order(results$MisclassificationRate, na.last = NA), ] 
+head(best_pairs) # ca and oldpeak has the lowest misclassification rate
+```
+
+The model with the pair that yields the lowest missclassification rate (ca and oldpeak) is trained. We generate predicted probabilites on the test set - these are converted to log oods which are utilised for input to our lasso model. Here again we opt to utilise cross-validation to determine the optimal penalty parameter. The accuracy of our test is determined to be 0.732899. This is determined by comparing the predicted classes to target values.
+
+
+```{r}
+# Train the best model using ca and oldpeak
+best_model <- glm(target ~ ca + oldpeak, data = train_data, family = binomial)
+
+test_data$predicted_prob <- predict(best_model, newdata = test_data, type = "response")
+
+# Convert probabilities to log odds
+test_data$log_odds <- log(test_data$predicted_prob / (1 - test_data$predicted_prob))
+
+test_data$log_odds
+
+# Use log odds as input for Lasso regression
+x_test <- model.matrix(test_data$log_odds ~ ., data = test_data %>% select(all_of(predictors)))[, -1]
+y_test <- test_data$log_odds
+
+lasso_test <- cv.glmnet(x_test, y_test, alpha = 1)
+best_lambda_test <- lasso_test$lambda.min
+lasso_coeffs_test <- coef(lasso_test, s = best_lambda_test)
+
+# Visualize Lasso coefficients
+coef_df <- data.frame(
+  Predictor = rownames(lasso_coeffs_test),
+  Coefficient = as.numeric(lasso_coeffs_test)
+)
+coef_df <- coef_df[-1, ] # remove intercept
+
+ggplot(coef_df, aes(x = Predictor, y = Coefficient)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Lasso Coefficients", x = "Predictor", y = "Coefficient Value")
+
+# Evaluate the best model's accuracy on the test set
+test_data$predicted_class <- ifelse(test_data$predicted_prob > 0.5, 1, 0)
+accuracy <- mean(test_data$predicted_class == test_data$target)
+cat("Test Set Accuracy:", accuracy, "\n")
+
+# Confusion Matrix
+confusionMatrix(factor(test_data$predicted_class), factor(test_data$target)) # 0.732899 accuracy
+```
+
+Our model that is interpretable is trained in a similar fashion. We generate predicted probabilites on the test set - these are converted to log oods which are utilised for input to our lasso model. Here again we opt to utilise cross-validation to determine the optimal penalty parameter. The accuracy of our test is determined to be 0.7622. This is determined by comparing the predicted classes to target values. It is interesting that our interpretable model yields a higher accuracy than the aforementioned model.
+
+```{r}
+# Generate predictive probabilities for glm1
+test_data$glm1_predicted_prob <- predict(glm1, newdata = test_data, type = "response")
+
+# Convert probabilities to log odds for glm1
+test_data$glm1_log_odds <- log(test_data$glm1_predicted_prob / (1 - test_data$glm1_predicted_prob))
+
+# Use log odds as input for Lasso regression for glm1
+x_test_glm1 <- model.matrix(test_data$glm1_log_odds ~ ., data = test_data %>% select(all_of(predictors)))[, -1]
+y_test_glm1 <- test_data$glm1_log_odds
+
+lasso_test_glm1 <- cv.glmnet(x_test_glm1, y_test_glm1, alpha = 1)
+best_lambda_test_glm1 <- lasso_test_glm1$lambda.min
+lasso_coeffs_test_glm1 <- coef(lasso_test_glm1, s = best_lambda_test_glm1)
+
+# Visualize Lasso coefficients for glm1
+coef_df_glm1 <- data.frame(
+  Predictor = rownames(lasso_coeffs_test_glm1),
+  Coefficient = as.numeric(lasso_coeffs_test_glm1)
+)
+coef_df_glm1 <- coef_df_glm1[-1, ] # remove intercept
+
+ggplot(coef_df_glm1, aes(x = Predictor, y = Coefficient)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_minimal() +
+  labs(title = "Lasso Coefficients (GLM1)", x = "Predictor", y = "Coefficient Value")
+
+# Evaluate glm1's accuracy on the test set
+test_data$glm1_predicted_class <- ifelse(test_data$glm1_predicted_prob > 0.5, 1, 0)
+accuracy_glm1 <- mean(test_data$glm1_predicted_class == test_data$target)
+cat("Test Set Accuracy (GLM1):", accuracy_glm1, "\n")
+
+# Confusion Matrix for glm1
+confusionMatrix(factor(test_data$glm1_predicted_class), factor(test_data$target))
+```
+
