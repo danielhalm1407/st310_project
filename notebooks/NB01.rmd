@@ -1108,13 +1108,13 @@ plot_grid(param_grid, val_measure = "cv_misclass_rate", tp1 = "mtry", tp2 = "tre
 ##### Use Validation Set Approach to get best tuning Parameters
 
 ```{r}
-preds <- names(Heart)[-1]
+predictors <- names(Heart)[-1]
 # Set up a set of formulae (subsets of predictors) that we can use
-formulas = c(paste(as.character(preds[1:2]), collapse = " + "),
-                                           paste(as.character(preds[1:4]), collapse = " + "),
-                                           paste(as.character(preds[1:8]), collapse = " + "),
-                                           paste(as.character(preds[1:12]), collapse = " + "))
-formulas <- paste("y ~", formulas)
+selected_predictors = c(paste(as.character(predictors[1]), collapse = " + "),
+                                           paste(as.character(predictors[1:4]), collapse = " + "),
+                                           paste(as.character(predictors[1:8]), collapse = " + "),
+                                           paste(as.character(predictors[1:12]), collapse = " + "))
+formulas <- paste("y ~", selected_predictors)
 
 
 
@@ -1124,7 +1124,7 @@ tuning_grid2 <- expand.grid(
   mtry = 1:6,
   trees = c(500),
   thresh = c(0.4, 0.5),
-  formula = as.character(formulas[3])
+  formula = as.character(formulas[1])
 )
 tuning_grid2$formula = as.character(tuning_grid2$formula)
 tuning_grid2
@@ -1168,7 +1168,7 @@ get_model_spec <- function(model_fitting_procedure, engine, tuning_params) {
 
 grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fitting_procedure, engine) {
   # Initialize empty data frames to store results and predictions
-  results <- tuning_grid
+  accuracy_df <- tuning_grid
   all_preds_df <- data.frame()
   
   # Iterate over each combination of hyperparameters in the tuning grid
@@ -1197,7 +1197,7 @@ grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fittin
     error <- mean(predictions != valid_data$y)
     
     # Store results
-    results$misclass_rate[i] = error
+    accuracy_df$misclass_rate[i] = error
                                   
     
     # Store predictions
@@ -1212,7 +1212,7 @@ grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fittin
   
   # Return both results and predictions
   return(list(
-    results = results,
+    accuracy_df = accuracy_df,
     preds = all_preds_df
   ))
 }
@@ -1224,15 +1224,17 @@ rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid2, "random_
 
 **Look at the Grid**
 ```{r}
-rf_output$results
+rf_output$accuracy_df
 ```
 
 **Look at the Plot**
 ```{r}
-plot_grid(rf_output$results, val_measure = "misclass_rate", tp1 = "mtry", tp2 = "thresh")
+plot_grid(rf_output$accuracy_df, val_measure = "misclass_rate", tp1 = "mtry", tp2 = "thresh")
 ```
 ```{r}
-check_preds <- rf_output$preds[rf_output$preds$spec_no==1,]
+# Check the predictions of the model with the lowest misclass rate
+check_preds <- rf_output$preds %>%
+  filter(spec_no == which.min(rf_output$results$misclass_rate))
 check_preds
 ```
 
@@ -1240,6 +1242,229 @@ check_preds
 graph_preds(check_preds$preds, check_preds$y, cm=T)
 ```
 
+#### Create a function that conducts one forward or one backward stepwise iteration
+```{r}
+fwd_bckwd_step <- function(train_data, valid_data, current_predictors_formula, tuning_params, model_fitting_procedure, engine, direction = "fwd") {
+  
+
+  
+  # Get all predictor names except the target variable "y"
+  predictors <- setdiff(names(train_data), "y")
+  
+  # Split current_predictors string into individual variable names, if any
+  if (current_predictors_formula == "") {
+    current_predictors = " "
+  }
+  else {
+    current_predictors <- unlist(strsplit(current_predictors_formula, " \\+ "))
+  }
+  
+  # Find remaining predictors not in the current predictor set
+  predictors_left <- setdiff(predictors, current_predictors)
+  
+  # Track the number of predictors currently in the model
+  n <- length(current_predictors) # Current number of predictors in the model
+  
+  # Generate formulas based on direction
+  if (direction == "fwd") {
+    # Forward step: Generate new formulas by adding one predictor at a time
+    predictor_combos <- expand.grid(current = paste(current_predictors, collapse = " + "), new = predictors_left, stringsAsFactors = FALSE)
+    if (current_predictors_formula == "") {
+      predictor_combos$formula <- paste("y ~", predictor_combos$new)
+    }
+    else {
+      predictor_combos$formula <- paste("y ~", predictor_combos$current, "+", predictor_combos$new)
+    }
+    
+  } else if (direction == "bkwd") {
+    # Backward step: Generate new formulas by removing one predictor at a time
+    predictor_combos <- expand.grid(current = paste(current_predictors, collapse = " + "), remove = current_predictors, stringsAsFactors = FALSE)
+    predictor_combos$formula <- apply(predictor_combos, 1, function(row) {
+      remaining_vars <- setdiff(current_predictors, row["remove"])
+      paste("y ~", paste(remaining_vars, collapse = " + "))
+    })
+  }
+  
+  # Expand tuning_params to match the number of new formulas
+  tuning_params <- tuning_params %>% select(-formula)
+  fwd_tuning_grid <- tuning_params[rep(1:nrow(tuning_params), each = nrow(predictor_combos)), ]
+  
+  # Assign new formulas to the expanded tuning grid
+  fwd_tuning_grid$formula <- as.character(predictor_combos$formula)
+  # Calculate the accuracy for each specification in the grid
+  accuracy_df <- grid_validate_tidy(train_data, valid_data, fwd_tuning_grid, model_fitting_procedure, engine)$accuracy_df
+  
+  # Extract the best model (the one with the lowest misclassification rate)
+  best_model <- accuracy_df %>% filter(misclass_rate == min(misclass_rate))
+  best_model <- best_model[1,]
+  
+  # Get the final list of predictors from the best model (right-hand side of the formula)
+  new_predictors <- unlist(strsplit(best_model$formula, " ~ "))[2]
+  
+  # Output the best model and the new set of predictors
+  return(list(accuracy_df = accuracy_df, best_model = best_model, new_predictors = new_predictors, n = n))
+  return(fwd_tuning_grid)
+}
+
+fwd_step_output <- fwd_bckwd_step(Heart_train, Heart_valid, selected_predictors[1]
+, tuning_grid2[1,], "random_forest", "randomForest", direction = "fwd")
+
+fwd_step_output$accuracy_df
+fwd_step_output$best_model
+fwd_step_output$new_predictors
+
+```
+
+
+
+
+
+
+#### Create a function that conducts mixed stepwise subset selection
+
+This will be based on a rule of conducting b steps backward after every a steps forward, until we get to using the maximum amount of predictors.
+
+This then produces a grid of the best model for each semi iteration, and then in turn selects the best n predictor model out of those.
+
+
+```{r}
+stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitting_procedure, engine, fwd_steps = 3, bkwd_steps = 2) {
+  # Get all predictor names except the target variable "y"
+  predictors <- setdiff(names(train_data), "y")
+  
+  # Get the Number of Predictors
+  n_predictors <- length(predictors)
+  
+  # find out how many iterations m  it is before we reach the total number of predictors
+  m = 0 # start with 0 iterations
+  n = 0 # start with 0 predictors
+  
+  fwd = c()
+  bkwd = c()
+  n_list = c()
+  total_fwd = 0
+  total_bkwd = 0
+  while (n <= n_predictors-fwd_steps) {
+    if (total_fwd/fwd_steps != total_bkwd/bkwd_steps) {
+      # if we have not done m iterations of a forward and b backward steps, then we must take another b backward steps so that they have the same number of iterations
+      total_bkwd = total_bkwd + bkwd_steps
+      fwd = c(fwd, total_fwd)
+      bkwd = c(bkwd, total_bkwd)
+      n = n - bkwd_steps
+      n_list = c(n_list, n)
+    }
+    total_fwd = total_fwd + fwd_steps 
+    fwd = c(fwd, total_fwd)
+    bkwd = c(bkwd, total_bkwd)
+    n = n + fwd_steps
+    n_list = c(n_list, n)
+  }
+  
+  accuracy_df = data.frame(total_fwd = fwd, total_bkwd = bkwd, n = n_list)
+  
+  return(list(accuracy_df = accuracy_df))
+}
+
+stepwise_selection_output <- stepwise_selection(Heart_train, Heart_valid, tuning_grid2[2,], "random_forest", "randomForest")
+
+stepwise_selection_output$accuracy_df
+```
+
+
+```{r}
+stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitting_procedure, engine, fwd_steps = 3, bkwd_steps = 2) {
+  # Get all predictor names except the target variable "y"
+  predictors <- setdiff(names(train_data), "y")
+  
+  # Get the Number of Predictors
+  n_predictors <- 4
+  
+  # Initialize counters for forward and backward steps
+  total_fwd = 0
+  total_bkwd = 0
+  n = 0  # start with 0 predictors in the model
+  
+  fwd = c()
+  bkwd = c()
+  n_list = c()
+  accuracy = c()
+  
+  best_models <- list()  # To store the best models for each step
+  selected_predictors <- "cp"  # Start with "cp" as the first predictor
+  
+  # Perform major iterations (each major iteration consists of fwd_steps forward and bkwd_steps backward)
+  while (n < n_predictors) {
+    # Forward steps (for each major iteration, take fwd_steps forward)
+    for (i in 1:fwd_steps) {
+      if (n + 1 <= n_predictors) {
+        total_fwd = total_fwd + 1
+        n = n + 1
+        
+        # Perform a forward selection step using fwd_bckwd_step
+        fwd_step_output <- fwd_bckwd_step(train_data, valid_data, selected_predictors, tuning_params, model_fitting_procedure, engine, direction = "fwd")
+        
+        # Store the best model for this forward step
+        best_model <- fwd_step_output$best_model
+        best_models[[paste0("fwd_", total_fwd)]] <- best_model
+        
+        # Update selected_predictors to the new predictors from the best model
+        selected_predictors <- fwd_step_output$new_predictors
+        
+        fwd = c(fwd, total_fwd)
+        bkwd = c(bkwd, total_bkwd)
+        n_list = c(n_list, n)
+        accuracy = c(accuracy, best_model$misclass_rate)
+        #print(best_model)
+      }
+    }
+    
+    # Backward steps (after forward steps, perform bkwd_steps backward)
+    for (i in 1:bkwd_steps) {
+      if (n - 1 >= 0) {
+        total_bkwd = total_bkwd + 1
+        n = n - 1
+        
+        # Perform a backward selection step using fwd_bckwd_step
+        bkwd_step_output <- fwd_bckwd_step(train_data, valid_data, selected_predictors, tuning_params, model_fitting_procedure, engine, direction = "bkwd")
+        
+        # Store the best model for this backward step
+        best_model <- bkwd_step_output$best_model
+        best_models[[paste0("bkwd_", total_bkwd)]] <- best_model
+        
+        
+        # Update selected_predictors to the new predictors from the best model
+        selected_predictors <- bkwd_step_output$new_predictors
+        
+        fwd = c(fwd, total_fwd)
+        bkwd = c(bkwd, total_bkwd)
+        n_list = c(n_list, n)
+        accuracy = c(accuracy, best_model$misclass_rate)
+        #print(best_model)
+      }
+    }
+    
+    # If we can still take more forward steps and backward steps, continue another major iteration
+    if (n + fwd_steps > n_predictors) {
+      break  # Stop if adding fwd_steps would exceed the total number of predictors
+    }
+  }
+  
+  # Create a dataframe for the accuracy results
+  accuracy_df = data.frame(total_fwd = fwd, total_bkwd = bkwd, n = n_list, misclass_rate = accuracy)
+  
+  return(list(accuracy_df = accuracy_df, best_models = best_models))
+}
+
+# Example usage:
+stepwise_selection_output <- stepwise_selection(Heart_train, Heart_valid, tuning_grid2[2,], "random_forest", "randomForest")
+stepwise_selection_output$accuracy_df  # Table with steps
+best_models <- stepwise_selection_output$best_models  # List of best models after each step
+#best_models
+
+```
+```{r}
+rbind(best_models$fwd_1,best_models$fwd_2)
+```
 
 
 
