@@ -1079,12 +1079,7 @@ predictions
 
 
 
-```{r}
-names(validation_split)
-validation_split$train_id
-names(validation_rset)
-validation_rset
-```
+
 
 
 ##### Compare Prediction accuracy for each of the models
@@ -1113,84 +1108,130 @@ plot_grid(param_grid, val_measure = "cv_misclass_rate", tp1 = "mtry", tp2 = "tre
 ##### Use Validation Set Approach to get best tuning Parameters
 
 ```{r}
+preds <- names(Heart)[-1]
+# Set up a set of formulae (subsets of predictors) that we can use
+formulas = c(paste(as.character(preds[1:2]), collapse = " + "),
+                                           paste(as.character(preds[1:4]), collapse = " + "),
+                                           paste(as.character(preds[1:8]), collapse = " + "),
+                                           paste(as.character(preds[1:12]), collapse = " + "))
+formulas <- paste("y ~", formulas)
+
+
+
+
 # Set up a new tuning grid with a thresh value that we can change
 tuning_grid2 <- expand.grid(
   mtry = 1:6,
   trees = c(500),
   thresh = c(0.4, 0.5),
-  formula = as.character(c("y ~ ca + oldpeak + thalach + cp + thal +trestbps + chol"))
+  formula = as.character(formulas[3])
 )
 tuning_grid2$formula = as.character(tuning_grid2$formula)
 tuning_grid2
 #as.formula(tuning_grid2$formula[2])
 ```
 
+##### Define a function that calculatevalidation set accuracy for a grid of tuning parameters.
+
+Uses tidymodels syntax efficiency
+
+Uses a helper function to get the model specification (including the fitting procedure and the engine) into tidyverse's desired format first.
+
+```{r}
+# Function to get model specification dynamically
+get_model_spec <- function(model_fitting_procedure, engine, tuning_params) {
+  if (model_fitting_procedure == "tree") {
+    model_spec_updated <- decision_tree(mode = "classification") %>%
+      set_engine(engine)  # Default engine: "tree"
+    
+  } else if (model_fitting_procedure == "random_forest") {
+    model_spec_updated <- rand_forest(mtry = tuning_params$mtry, 
+                                      trees = tuning_params$trees, 
+                                      mode = "classification") %>%
+      set_engine(engine, probability = TRUE)  # Default engine: "randomForest"
+    
+  } else if (model_fitting_procedure == "boosting") {
+    model_spec_updated <- boost_tree(mode = "classification") %>%
+      set_engine(engine)  # Default engine: "gbm"
+    
+  } else {
+    stop("Invalid model fitting procedure. Choose from 'tree', 'random_forest', or 'boosting'.")
+  }
+  
+  return(model_spec_updated)
+}
+```
 
 ```{r}
 
 
 
-grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_spec) {
+grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fitting_procedure, engine) {
   # Initialize empty data frames to store results and predictions
-  results <- data.frame()  # Changed to data.frame
-  all_preds_df <- data.frame()  # Changed to data.frame
+  results <- tuning_grid
+  all_preds_df <- data.frame()
   
   # Iterate over each combination of hyperparameters in the tuning grid
   for(i in 1:nrow(tuning_grid)) {
-    
-    # Extract current combination of mtry, trees, and other tuning parameters
+    # Extract current tuning parameters
     tuning_params <- tuning_grid[i, ]
     
-    # Dynamically update the model_spec with the current hyperparameters
-    model_spec_updated <- rand_forest(mtry = tuning_params$mtry, 
-                                      trees = tuning_params$trees, 
-                                      mode = "classification") %>%
-      set_engine("randomForest", probability = TRUE)
+    # Get the model specification dynamically
+    model_spec_updated <- get_model_spec(model_fitting_procedure, engine, tuning_params)
     
-    # Create a workflow with the current hyperparameters
+    # Create a workflow
     current_wf <- workflow() %>%
       add_model(model_spec_updated) %>%
       add_formula(as.formula(tuning_params$formula))
     
     # Fit the model on the training data
     model_fit <- fit(current_wf, data = train_data)
-    #model_fit <- model_spec_updated %>% fit(y ~ ., data = train_data)
-    
     
     # Predict probabilities on the validation set
     prob_predictions <- predict(model_fit, valid_data, type = "prob")$.pred_1
     
-    predictions <- as.factor(as.numeric(prob_predictions > thresh))
+    # Apply threshold to classify predictions
+    predictions <- as.factor(as.numeric(prob_predictions > tuning_params$thresh))
     
+    # Calculate misclassification rate
     error <- mean(predictions != valid_data$y)
     
-    # Store results with hyperparameters and validation accuracy
-    results <- rbind(results, data.frame(mtry = tuning_params$mtry,
-                                         trees = tuning_params$trees,
-                                         misclass_rate = error))
+    # Store results
+    results$misclass_rate[i] = error
+                                  
     
-    # Create a table for this combination of hyperparameters and append predictions
+    # Store predictions
     preds_df <- data.frame(preds = predictions) %>%
       bind_cols(valid_data %>% select(y)) %>%
       mutate(spec_no = i,
              mtry = tuning_params$mtry, 
              trees = tuning_params$trees)
     
-    # Append to all_predictions data frame
     all_preds_df <- rbind(all_preds_df, preds_df)
   }
   
-  # Return both the results table and the predictions table as a list
+  # Return both results and predictions
   return(list(
     results = results,
     preds = all_preds_df
   ))
 }
 
+rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid2, "random_forest", "randomForest")
 
+```
+##### Compare the Prediction Accuracy of Multiple Models
 
-rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid2, ranger_spec)
+**Look at the Grid**
+```{r}
 rf_output$results
+```
+
+**Look at the Plot**
+```{r}
+plot_grid(rf_output$results, val_measure = "misclass_rate", tp1 = "mtry", tp2 = "thresh")
+```
+```{r}
 check_preds <- rf_output$preds[rf_output$preds$spec_no==1,]
 check_preds
 ```
