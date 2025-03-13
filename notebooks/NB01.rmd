@@ -47,6 +47,7 @@ library(ggplot2) # for maintainable plots with a lot of interactability
 library(yardstick) # for plotting an ROC curve
 library(iml) # To get PDPs from a random forest
 library(GGally) # to make various two-way plots
+library(rpart.plot) # to display trees generated from the rpart engine
 
 # Easier Analysis
 library(tidymodels) # Allows easy model fitting and multi-parameter tuning
@@ -161,86 +162,7 @@ const_yhat_success
 
 #### Set up separate training and validation sets
 
-##### Define a function to create training and validation sets
-
-The below function creates training and validation sets or 'folds' in dataframe and matrix form, as well as returning the indices of the observations corresponding to these.
-
-Optionally, we can have the class balance in the validation set (called test_bal) be different to that in the training set. We set this to be the same in both training and validation sets, and equal to the positive class proportion in the original data, given that each set is sampled independently from the original data.
-
-
-```{r}
-
-make_sets <- function(df, frac = 0.6, classify = F, test_bal = const_yhat_success) {
-  train_indices <- sample(1:nrow(df), size = frac * nrow(df), replace = F)
-  
-  y_train <- df[, 1]
-  X_train <- as.matrix(df[, -1])
-  
-  if (frac>0) {
-    valid_indices <- -train_indices
-  }
-  else {
-    valid_indices = rownames(df)
-  }
-  train_fold <- df[train_indices,]
-  valid_fold <- df[valid_indices,]
-  
-  const_yhat_success <- NA
-  outcome_counts_pre <- NA
-  outcome_counts_valid <- NA
-  if (classify==T) {
-    outcome_counts_pre <- valid_fold |> count(y)
-    outcome_counts_pre$proportion <- outcome_counts_pre$n / sum(outcome_counts_pre$n)
-    rare_class_size <- round(((1-test_bal) * outcome_counts_pre[outcome_counts_pre$y==1,"n"] * (1/test_bal)),0)
-    rare_class_indices <- which(valid_fold$y==0)
-    common_class_indices <- which(valid_fold$y==1)
-    sampled_indices <- sample(rare_class_indices, size = rare_class_size, replace = FALSE)
-    valid_indices <- c(sampled_indices,common_class_indices)
-    valid_fold <- valid_fold[valid_indices,]
-    outcome_counts_valid <- valid_fold |> count(y)
-    outcome_counts_valid$proportion <- outcome_counts_valid$n / sum(outcome_counts_valid$n)
-    const_yhat_success <- outcome_counts_valid$proportion[[2]]
-  }
-  #train_fold <- train_fold[order(rownames(train_fold)),]
-  #valid_fold <- valid_fold[order(rownames(valid_fold)),]
-  
-  y_train_fold <- train_fold[, 1]
-  X_train_fold <- as.matrix(train_fold[, -1])
-  
-  y_valid_fold <- valid_fold[, 1]
-  X_valid_fold <- as.matrix(valid_fold[, -1])
-  
-  return(list(y_train = y_train, X_train=X_train, train_fold = train_fold, valid_fold = valid_fold, y_train_fold = y_train_fold, X_train_fold = X_train_fold, y_valid_fold = y_valid_fold, X_valid_fold=X_valid_fold, const_yhat_success= const_yhat_success, outcome_counts_pre = outcome_counts_pre, outcome_counts_valid = outcome_counts_valid, train_indices=train_indices, valid_indices = valid_indices))
-}
-```
-
-##### Call the function that creates training and validation sets
-
-```{r}
-
-
-# Make training and validation sets for the whole data
-make_sets_output_1 <- make_sets(df=Heart )
-Heart_train_fold <- make_sets_output_1$train_fold
-Heart_valid_fold <- make_sets_output_1$valid_fold
-
-# Get matrix versions of the full data
-X <- make_sets_output_1$X_train
-Y <- make_sets_output_1$y_train
-
-# Make matrix versions of each of these
-Heart_X_train_fold <- make_sets_output_1$X_train_fold
-Heart_X_valid_fold <- make_sets_output_1$X_valid_fold
-
-Heart_y_train_fold <- make_sets_output_1$y_train_fold
-Heart_y_valid_fold <- make_sets_output_1$y_valid_fold
-
-# Extract the indices used for training and validation for future use
-train_indices <- make_sets_output_1$train_indices
-valid_indices <- make_sets_output_1$valid_indices
-```
-
-##### Alternately, Use the Tidyverse package
+We use a built in feature from the Tidyverse package to create a 70-30 train-test split.
 ```{r}
 Heart_split <- initial_split(Heart, prop = 0.7)
 Heart_train <- Heart_split %>% training()
@@ -257,21 +179,6 @@ Heart_train
 Heart_valid
 ```
 
-
-#### Create k folds for cross-validation 
-
-If we want to use the same folds for cross validation for all of the model fitting procedures and all specifications for all model fitting procedures.
-
-
-```{r}
-
-
-k <- 5
-folds <- sample(rep(1:k, length.out = nrow(Heart)))
-
-train_input <- list(train_df = Heart, X_train = X, y_train = Y, train_indices=train_indices, valid_indices = valid_indices, folds=folds)
-
-```
 
 
 
@@ -321,68 +228,13 @@ Heart_models
 ```
 
 
-#### Define a set of functions that help to validate or cross-validate a grid of tuning parameters
+#### Functions for Model Tuning
 
-
-##### Define a Function that Generates Predictions
-
-Given any model fitting procedure (e.g. tree), a model fitted to that procedure (e.g. tree.fit fit to some training data), and any validation set, this function calculates the predicted outcome.
-
-Calculating predictions varies not only on:
-
-1. Whether we are using classification (in which case we get the conditional probabilities first, and then assign a class based on our thresholds), but also; 
-
-2. what model fitting procedure we are using, since the packages in R use different syntax. For example, some require an X matrix input only (without the outcome), and others have the conditional probabilities in different formats.
-
-```{r}
-get_predictions <- function(model, X_valid_fold, y_valid_fold, classify, formula, model_f, matrix, thresh) {
-  
-  # Handle the matrix vs non-matrix input
-  if (matrix) {
-    valid_fold <- X_valid_fold
-  } else {
-    valid_fold <- data.frame(y = y_valid_fold, X_valid_fold)
-  }
-  
-  # Classification predictions
-  if (classify) {
-    if (model_f == "tree") {
-      # For tree models (e.g., decision tree), with 2 indexing the prob of positive class
-      prob_predictions <- predict(model, valid_fold)[, 2]
-    }
-    else if (model_f == "randomForest") {
-      # For random forest models (e.g., decision tree), assuming it's a binary classification
-      prob_predictions <- predict(model, valid_fold, type = "prob")[,2]
-    }
-    else if (model_f == "naiveBayes") {
-      # For Naive Bayes, type="raw" returns probabilities
-      prob_predictions <- predict(model, newdata = valid_fold, type = "raw")[, 2]  # Checking column 2 for second class
-    }
-    else if (model_f == "qda" | model_f == "lda") {
-      # For QDA and LDA, we extract posterior probabilities for the second class (usually "1" or "2")
-      prob_predictions <- predict(model, newdata = valid_fold, type = "response")$posterior[, 2]  # Assuming the second column is for class "1"
-    } 
-    else {
-      # Default case for other models (e.g., logistic regression)
-      prob_predictions <- predict(model, valid_fold, type = "response")
-    }
-    
-    # Apply threshold and convert to factor (binary classification)
-    predictions <- as.factor(as.numeric(prob_predictions > thresh))
-  } 
-  else {
-    # If regression, just return predicted values
-    predictions <- predict(model, valid_fold)
-  }
-  
-  return(predictions)
-}
-
-```
+We define a set of functions to select the 'best' tuning parameters for different models, often defined as the simplest model past a threshold level of prediction accuracy.
 
 ##### Define a Function that Finds Prediction Accuracy
 
-This takes predictions as inputs and calculates the validation set mse or misclass rate accordingly.
+This takes predictions as inputs and calculates the validation mis-classification rate (or, optionally, MSE) accordingly.
 
 ```{r}
 
@@ -397,193 +249,129 @@ calculate_error <- function(predictions, true_values, classify) {
 ```
 
 
-##### Define a Function that Cross-Validates a Specification
+##### Define a Function that Calculates Validation Set Accuracy for a Grid of Tuning Parameters.
 
-This function takes a model fitting procedure and specification as an input, and then fits the model k times on k folds, using the previously defined functions to generate predictions and prediction accuracy for each fold.
+We use Tidymodels syntax for efficiency and modularity with different fitting procedures.
 
-In turn, it stores the accuracy of these folds and calculates the mean of this accuracy across all k folds and stores it as its main output, corresponding to the k-validation-fold accuracy.
+Uses a helper function to get the model specification (including the fitting procedure and the engine) into tidyverse's desired format first.
 
 ```{r}
-
-cross_validate <- function(thresh, model_f, X, Y, k, classify, train_df, folds, model_input, matrix, xname, yname) {
-  e_folds <- c()  # Store error metrics for each fold
-  fits <- list()   # Store model fits for each fold
-  preds <- list()  # Store predictions for each fold
-  valids <- list() # Store true y-values for each fold
+# Function to get model specification
+get_model_spec <- function(model_fitting_procedure, engine, tuning_params) {
+  if (model_fitting_procedure == "tree") {
+    model_spec_updated <- decision_tree(
+      mode = "classification", 
+      cost_complexity = tuning_params$cp,  # Cost-complexity pruning
+      tree_depth = tuning_params$maxdepth,  # Limit depth
+      min_n = tuning_params$min_n  # Controls the number of splits
+    ) %>%
+      set_engine(engine)  
+    
+  } else if (model_fitting_procedure == "random_forest") {
+    model_spec_updated <- rand_forest(
+      mtry = tuning_params$mtry, 
+      trees = tuning_params$trees, 
+      mode = "classification"
+    ) %>%
+      set_engine(engine, probability = TRUE)  
+    
+  } else if (model_fitting_procedure == "boosting") {
+    model_spec_updated <- boost_tree(mode = "classification") %>%
+      set_engine(engine)  
+    
+  } else {
+    stop("Invalid model fitting procedure. Choose from 'tree', 'random_forest', or 'boosting'.")
+  }
   
-  for (fold in 1:k) {
-    # Train/validation split for the fold
-    X_train_fold <- X[folds != fold, ]
-    y_train_fold <- Y[folds != fold]
-    X_valid_fold <- X[folds == fold, ]
-    y_valid_fold <- Y[folds == fold]
-    
-    # Update model_input for this fold
-    if (!matrix) {
-      model_input$data <- train_df[folds != fold, ]
-    } else {
-      model_input[[xname]] <- X_train_fold
-      model_input[[yname]] <- y_train_fold
-    }
+  return(model_spec_updated)
+}
 
-    
-    # Train model
-    model <- do.call(model_f, model_input)
-    
-    # Get validation predictions
-    predictions <- get_predictions(model, X_valid_fold, y_valid_fold, classify, model_input$formula, model_f, matrix, thresh)
-    
-    # Compute error for this fold
-    fold_error <- calculate_error(predictions, y_valid_fold, classify)
+```
 
+```{r}
+# Function to get the accuracy for each model specification corresponding to the tuning parameters
+
+
+grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fitting_procedure, engine) {
+  # Initialize empty data frames to store results and predictions
+  accuracy_df <- tuning_grid
+  all_preds_df <- data.frame()
+  model_fits <- list()  # Initialize the list to store model fits
+  
+  # Iterate over each combination of hyperparameters in the tuning grid
+  for(i in 1:nrow(tuning_grid)) {
+    # Extract current tuning parameters
+    tuning_params <- tuning_grid[i, ]
+    
+    # Get the model specification dynamically
+    model_spec_updated <- get_model_spec(model_fitting_procedure, engine, tuning_params)
+    
+    # Create a workflow
+    current_wf <- workflow() %>%
+      add_model(model_spec_updated) %>%
+      add_formula(as.formula(tuning_params$formula))
+    
+    # Fit the model on the training data
+    model_fit <- fit(current_wf, data = train_data)
+    
+    # Store the model fit in the list
+    model_fits[[i]] <- model_fit  # Index the model fit by i
+    
+    # Predict probabilities on the validation set
+    prob_predictions <- predict(model_fit, valid_data, type = "prob")$.pred_1
+    
+    # Apply threshold to classify predictions
+    predictions <- as.factor(as.numeric(prob_predictions > tuning_params$thresh))
+    
+    # Calculate misclassification rate
+    error <- mean(predictions != valid_data$y)
     
     # Store results
-    fits[[fold]] <- model
-    preds[[fold]] <- predictions
-    valids[[fold]] <- y_valid_fold
-    e_folds <- c(e_folds, fold_error)
+    accuracy_df$misclass_rate[i] = error
+    
+    # Put the accuracy results first and the formula last
+    accuracy_df <- accuracy_df %>%
+      select(misclass_rate, everything(), -formula, formula)
+    
+    # Store predictions
+    preds_df <- data.frame(preds = predictions, prob_preds = prob_predictions) %>%
+      bind_cols(valid_data %>% select(y)) %>%
+      mutate(spec_no = i)
+    
+    all_preds_df <- rbind(all_preds_df, preds_df)
   }
   
-  # Compute overall CV error
-  avg_error <- mean(e_folds)
-  
-  # Return models, predictions, validation targets, and error
-  return(list(fits = fits, preds = preds, valids = valids, error = avg_error))
+  # Return both results and predictions, including the list of model fits
+  return(list(
+    accuracy_df = accuracy_df,
+    preds = all_preds_df,
+    model_fits = model_fits  # Add the list of model fits to the output
+  ))
 }
+
+
 
 
 ```
 
-
-##### Define a Function that Cross-Validates a Specification
-
-This function takes a model fitting procedure and specification as an input, and then fits the model once on a single validation set, using the previously defined functions to generate predictions and prediction accuracy on this set.
-
-In turn, it stores this accuracy as its main output, corresponding to the validation set accuracy.
+##### Set Up Formulas to Plug into Tuning Grids
 
 ```{r}
-
-validate <- function(thresh, model_f, X, Y, train_indices, valid_indices, classify, train_df, model_input, matrix, xname, yname) {
-  
-  # Update model_input for this fold
-  if (!matrix) {
-    model_input$data <- train_df[train_indices,]
-  } else {
-      model_input[[xname]] <- X[train_indices, ]
-      model_input[[yname]] <- y[train_indices]
-  }
-  
-  # Train model using pre-set model_input
-  model <- do.call(model_f, model_input)
-  # Get validation predictions
-  predictions <- get_predictions(model, X[valid_indices, ], Y[valid_indices], classify, model_input$formula, model_f, matrix, thresh)
-  
-  # Compute validation error
-  fold_error <- calculate_error(predictions, Y[valid_indices], classify)
-
-  
-  # Return the model, predictions, validation targets, and error
-  return(list(fits = model, preds = predictions, valids = Y[valid_indices], error = fold_error))
-}
+predictors <- names(Heart)[-1]
+# Set up a set of formulae (subsets of predictors) that we can use
+selected_predictors = c(paste(as.character(predictors[1]), collapse = " + "),
+                                           paste(as.character(predictors[1:4]), collapse = " + "),
+                                           paste(as.character(predictors[1:8]), collapse = " + "),
+                                           paste(as.character(predictors[1:12]), collapse = " + "))
+formulas <- paste("y ~", selected_predictors)
 
 ```
 
-##### Define a Function that Validates or Cross Validates a Grid of Specifications
-
-This function takes a model fitting procedure and a grid where each row is a specification as an input, and then finds the validation set or k-fold-validation accuracy, using the previous functions to fit the model, calculate predictions and in turn their accuracy.
-
-In turn, it stores this accuracy for each specification under a new column of this input grid as its main output.
-
-From the model output is also possible to retrieve the model fit, the predictions and the validation sets for each time a model (model fitting procedure and specification/tuning parameters combination) is fit, in case we want to go back to our results.
-
-Depending on interpretability and time, one can choose whether to validate or cross-validate.
-
-It is possible to input the validation set or validation folds from the start, or reshuffle (create these again) each time the function is called.
 
 
+#### Create a Function That Can Plot How Our Validation or Cross-Validation Error Measures Compare Based on Combinations of Tuning Parameters.
 
-```{r}
-
-
-
-grid_validate <- function(train_input_list = train_input, method = "cv", model_f = "tree", grid_df, k = 5, frac = 0.6, matrix = FALSE, classify = FALSE, test_bal = const_yhat_success, reshuffle = F) {
-  train_df <- train_input_list$train_df
-  if (reshuffle) {
-    sets_output <- make_sets(df = train_df, frac = frac, classify = classify, test_bal = test_bal)
-    X <- sets_output$X_train
-    Y <- sets_output$y_train
-    train_indices <- sets_output$train_indices
-    valid_indices <- sets_output$valid_indices
-    folds <- sample(rep(1:k, length.out = nrow(train_df))) # makes sure that the same folds are used, just like we make sure that the same validation set is used.
-  }
-  else {
-    X <- train_input_list$X_train
-    Y <- train_input_list$y_train
-    train_indices <- train_input_list$train_indices
-    valid_indices <- train_input_list$valid_indices
-    folds <- train_input_list$folds
-  }
-  # Initialize common variables
-  fits <- list()
-  preds <- list()
-  valids <- list()
-  
-  # Iterate over each row in grid_df
-  for (i in 1:nrow(grid_df)) {
-    # Set up model_input
-    model_input <- list()
-    xname <- ifelse(model_f == "gbart", "x.train", "x")
-    yname <- ifelse(model_f == "gbart", "y.train", "y")
-    
-    if (!matrix) {
-      model_input$formula <- as.formula("y ~ .")
-    } 
-    
-    # Apply grid parameters to model_input
-    current_model_f <- model_f  # Default model function
-    for (tp in names(grid_df)) {
-      if (!all(is.na(grid_df[[tp]]))) {
-        if (tp == "mindev") {
-          model_input$control <- tree.control(nobs = length(train_df$y), mindev = grid_df[i, tp])
-        } else if (tp == "preds_used") {
-          model_input$formula <- as.formula(paste("y ~", grid_df[i, tp]))
-        } else if (tp == "sub_model") {
-          current_model_f <- grid_df[i, tp]  # Override model function if 'submodel' is specified
-        } else if (tp != "thresh") {
-          model_input[[tp]] <- grid_df[i, tp]
-        }
-      }
-    }
-    # Get the threshold param if we have it specified and we are classifying. We don't pass this directly into the model fitting function, hence why it is not in the loop above
-    thresh <- if ("thresh" %in% names(grid_df) && !is.na(grid_df[i, "thresh"])) grid_df[i, "thresh"] else 0.5
-    
-    # Call validation function and store results
-    if (method == "cv") {
-      result <- cross_validate(thresh, current_model_f, X, Y, k, classify, train_df, folds, model_input, matrix, xname, yname)
-      error_col <- paste0("cv_", ifelse(classify, "misclass_rate", "mse"))
-    } else if (method == "v") {
-      result <- validate(thresh, current_model_f, X, Y, train_indices, valid_indices, classify, train_df, model_input, matrix, xname, yname)
-      error_col <- paste0("v_", ifelse(classify, "misclass_rate", "mse"))
-    } else {
-      stop("Invalid method. Choose 'cv' or 'v'.")
-    }
-    
-    # Store results in grid_df and lists
-    grid_df[[error_col]][i] <- result$error
-    fits[[i]] <- result$fits
-    preds[[i]] <- result$preds
-    valids[[i]] <- result$valids
-  }
-  
-  return(list(grid_df = grid_df, fits = fits, preds = preds, valids = valids))
-}
-
-
-```
-
-#### Create a Function that can plot how our validation or cross-validation error measures compare based on Combinations of tuning parameters.
-
-This takes a specification grid output from grid_validate() above as an input, plotting how validation accuracy/error changes based on up to two dimensions.
+This takes a specification grid output from grid_validate_tidy() above as an input, plotting how validation accuracy/error changes based on up to two dimensions.
 
 ```{r}
 plot_grid <- function(grid, val_measure = "v_mse", tp1 = "n_preds_used", tp2 = NA, logx = FALSE) {
@@ -663,6 +451,7 @@ graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
 
 
 
+
 ### Baseline Model: Logistic (Few Predictors)
 Explain why we used this
 
@@ -684,7 +473,142 @@ Run some code
 Look at results from best Model
 
 
-### Relatively Interpretable Model: Logistic (Multiple Predictors and Interactions)
+### Relatively Interpretable Model: Depth 5 Classification Tree
+
+### Classification Tree
+
+In this case, we use the rpart engine as opposed to the tree engine.
+
+#### Validate Best Tuning Parameters
+
+##### Set up A Tuning Grid
+```{r}
+tuning_grid_tree <- expand.grid(
+  cp = c(0.001),
+  #seq(0.001, 0.0001, length.out = 10),   # Cost complexity pruning (alpha parameter that imposes penalty on tree depth)
+  maxdepth = c(1,3,4,5,6,8,10,15,20),  # Limit tree depth
+  min_n = c(5),  # Number of obs per split, so if higher, reduces splits
+  thresh = c(0.4, 0.5),  
+  formula = as.character(formulas[4])
+)
+
+tuning_grid_tree$formula <- as.character(tuning_grid_tree$formula)
+```
+
+**Look at the Grid**
+```{r}
+tree_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid_tree, "tree", "rpart")
+
+# View the accuracy results
+tree_output$accuracy_df
+```
+
+**Look at the Plot**
+```{r}
+plot_grid(tree_output$accuracy_df, val_measure = "misclass_rate", tp1 = "maxdepth", tp2 = "thresh")
+```
+
+It is observable that already once we reach depth 4, validation set accuracy is relatively high, with only an approximate and acceptable 15% misclassification rate. Nonetheless, the short depth retains interpretability.
+
+
+
+
+#### Analyse Results
+
+```{r}
+# Check the predictions of the model with the lowest misclass rate
+best_spec_idx <- which.min(tree_output$accuracy_df$misclass_rate)
+best_spec_idx <- 3 # since this is still relatively interpretable.
+tree_fit_predictions <- tree_output$preds %>%
+  filter(spec_no == best_spec_idx)
+tree_fit <- tree_output$model_fits[[best_spec_idx]]
+#tree_fit_predictions
+```
+
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+tree_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+#### Use Best Model To Learn About Data
+
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- tree_output$accuracy_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+
+##### Look at the splits it is conducting and on what variables:
+
+
+**Using the rpart engine**
+
+```{r}
+# Define the best model specification
+best_model_spec <- decision_tree(
+  mode = "classification", 
+  cost_complexity = best_params$cp,  # Cost-complexity pruning
+  tree_depth = best_params$maxdepth,  # Max depth of tree
+  min_n = best_params$min_n  # Minimum number of observations per node
+) %>%
+  set_engine("rpart")
+
+# Create workflow
+best_workflow <- workflow() %>%
+  add_model(best_model_spec) %>%
+  add_formula(as.formula(best_params$formula))
+
+# Fit the model to full training data
+best_tree_fit <- fit(best_workflow, data = Heart_train)
+
+# Extract the fitted model
+best_rpart_model <- extract_fit_engine(best_tree_fit)  # Gets the rpart model
+
+# Plot the tree
+rpart.plot(best_rpart_model)
+```
+**Using the tree engine**
+
+```{r}
+# Fit a full tree with the tree engine from the tree package
+full_tree <- tree(y ~ ., data = Heart_train)
+
+# Prune the tree to a depth of 5 (21 terminal nodes)
+pruned_tree <- prune.tree(full_tree, best = 12)  # 'best' controls the number of terminal nodes
+
+# Plot the pruned tree
+plot(pruned_tree)
+text(pruned_tree, pretty = 0)
+
+```
+
+```{r, echo=f, eval = F}
+cv_result <- cv.tree(tree_fit_tree, FUN = prune.tree)  # Cross-validation
+plot(cv_result$size, cv_result$dev, type = "b")  # Tree size vs. error
+plot(cv_result$k, cv_result$dev, type = "b")
+```
+```{r}
+
+```
+
+
 
 #### Validate/Cross-Validate Best Tuning Parameters
 Run some code
@@ -707,523 +631,37 @@ Look at results from best Model
 
 
 
-### Classification Tree
 
-#### Validate/Cross-Validate Best Tuning Parameters
-
-##### Create a Grid of Tuning Parameters
-```{r}
-mindev_values <- c(5,4,3,2,1)*rep(10^seq(-2, -4, by = -1), each=5) # i've done too much matrix stuff in my finance module so this dodgy syntax is now all too natural.
-
-tree_grid <- expand.grid(mindev = mindev_values, thresh = seq(0.4,0.6,0.02))
-#grid_results$tree_size <- NA
-#tree_grid <- data.frame(dummy = rep(NA,4))
-tree_grid
-```
-
-##### Compare Prediction accuracy for each of the models
-```{r} 
-tree_df_output <- grid_validate(grid_df = tree_grid,  method = "v", classify=T)
-tree_df <- tree_df_output$grid_df
-```
-**Look at the Grid**
-```{r}
-tree_df
-```
-
-**Graph the Grid**
-
-```{r}
-plot_grid(tree_df, val_measure = "v_misclass_rate", tp1 = "mindev", tp2 = "thresh")
-```
-
-
-#### Analyse the best specification's predictions against the validation set
-
-
-
-```{r}
-best_spec_output <- get_best_spec(grid_df = tree_df, grid_validation = tree_df_output)
-graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
-```
-#### Validate/Cross-Validate Best Tuning Parameters Using In-Built Features
-
-```{r}
-# Fit a tree
-tree_fit <- tree(y ~ ., Heart_train_fold)
-# Fit a glm
-heart_2 <- glm(y~ ., Heart_non_fctr, family = "gaussian")
-# Store the Probability predictions (the second row corresponds to the postive class probability)
-tree_fit_prob_preds <- predict(tree_fit, Heart_valid_fold)[,2]
-
-#GHet the standard bayesian classifier class predictions
-preds <- predict(tree_fit, Heart_valid_fold, type = "class")
-plot(preds, as.numeric(Heart_valid_fold$y)-1)
-
-```
-
-##### Cross-Validate the Best Pruning Coefficient, K (Penalty for number of terminal nodes) and overall tree size.
-```{r}
-cv.tree_fit <- cv.tree(tree_fit, FUN = prune.misclass)
-par(mfrow = c(1, 2))
-plot(cv.tree_fit$size, cv.tree_fit$dev, type = "b")
-plot(cv.tree_fit$k, cv.tree_fit$dev, type = "b")
-```
-#### Analyse the Accuracy
-
-
-##### Compare confusion matrices for the tree model.
-```{r}
-
-tree_fit_predictions <-data.frame(
-  y = Heart_valid_fold$y,
-  .fitted = tree_fit_prob_preds
-) |> 
-  mutate(yhat = factor(as.numeric(.fitted > const_yhat_success))) |>
-  mutate(misclass = (y!=yhat))
-paste("Class Balance:")
-tree_fit_predictions |> pull(.fitted) |> mean() # same as mean(tree_fit_predictions$.fitted)
-paste("Misclass Rate:")
-sum((tree_fit_predictions$y!=tree_fit_predictions$yhat)) / nrow(tree_fit_predictions)
-```
-##### Look at ROC Curve to guage Trade-Off
-```{r, eval=F}
-tree_fit_predictions |>
-  roc_curve(truth = y, .fitted,
-            event_level = "second") |>
-  autoplot()
-# the 'truth' is just the training y here, not the testing y, which we do not have, nor a validation set.
-```
-#### Classify at different thresholds.
-
-```{r, eval=F}
-higher_cutoff <- const_yhat_success + .15
-confusion_matrix_higher <-
-  tree_fit_predictions |>
-  mutate(yhat = factor(as.numeric(.fitted > higher_cutoff))) |> # this line predicts y = 1 ONLY if the predicted conditional probability is above the higher cutoff
-  conf_mat(truth = y, estimate = yhat)
-```
-```{r, eval=F}
-confusion_matrix_medium <-
-  tree_fit_predictions |>
-  mutate(yhat = factor(as.numeric(.fitted > const_yhat_success))) |> 
-  conf_mat(truth = y, estimate = yhat)
-```
-
-
-```{r, eval=F}
-lower_cutoff <- const_yhat_success - 0.15
-confusion_matrix_lower <-
-  tree_fit_predictions |>
-  mutate(yhat = factor(as.numeric(.fitted > lower_cutoff))) |>
-  conf_mat(truth = y, estimate = yhat)
-```
-
-##### 1. Balanced Confusion Matrix
-```{r, eval=F}
-confusion_matrix_medium |> autoplot(type = "heatmap")
-```
-##### 3. Low Cut-Off Confusion Matrix
-```{r, eval=F}
-confusion_matrix_lower |> autoplot(type = "heatmap")
-```
-##### 3. High Cut-Off Confusion Matrix
-```{r, eval=F}
-confusion_matrix_higher |> autoplot(type = "heatmap")
-```
-##### Comparing key sum stats:
-
-```{r, eval=F}
-higher_summary <- summary(confusion_matrix_higher) |>
-  mutate(higher = .estimate) |>
-  dplyr::select(.metric, higher)
-medium_summary <- summary(confusion_matrix_medium) |>
-  mutate(medium = .estimate) |>
-  dplyr::select(medium)
-lower_summary <- summary(confusion_matrix_lower) |>
-  mutate(lower = .estimate) |>
-  dplyr::select(lower)
-cbind(higher_summary, medium_summary, lower_summary) |>
-  knitr::kable()
-
-
-```
-
-As seen from the confusion matrices earlier, the threshold does not really seem to matter.
-
-### Generative Models for Classification (GMCs: LDA, QDA and Naive Bayes)**
-
-
-##### Create a Grid of Tuning Parameters
-
-```{r}
-
-gmc_grid <- expand.grid(sub_model = c("lda","qda", "naiveBayes"), thresh = seq(0.4,0.6,0.02))
-gmc_grid$sub_model <- as.character(gmc_grid$sub_model)
-gmc_grid
-```
-
-##### Compare Prediction accuracy for each of the models
-
-**Look at the Grid**
-```{r}
-gmc_output <- grid_validate(grid_df = gmc_grid,  method = "v", classify=T)
-gmc_df <- gmc_output$grid_df
-gmc_df
-```
-**Graph the Grid**
-
-```{r}
-plot_grid(gmc_df, val_measure = "v_misclass_rate", tp1 = "thresh", tp2 = "sub_model")
-```
-
-
-
-
-#### Analyse Results
-
-```{r}
-best_spec_output <- get_best_spec(grid_df = gmc_df, grid_validation = gmc_output)
-graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
-```
 
 ### Random Forest
 
-#### Validate/Cross-Validate Best Tuning Parameters Using In-Built Features
+#### Validate Best Tuning Parameters
+
+##### Set up a Grid of Tuning Parameters
 
 ```{r}
-
-
-thresh = 0.51  # Classification threshold
-
-# Fit a Random Forest model
-rf_fit <- randomForest(y ~ ., data = Heart_train_fold, ntree = 500, mtry = 3, importance = TRUE)
-
-# Store the probability predictions (the second column corresponds to the positive class probability)
-rf_fit_prob_preds <- predict(rf_fit, Heart_valid_fold, type = "prob")[,2]
-
-# Convert probabilities to class predictions using the threshold
-preds <- as.factor(as.numeric(rf_fit_prob_preds > thresh))
-valids <- Heart_valid_fold$y
-
-# Get the standard Bayesian classifier class predictions
-graph_preds(preds, valids, cm = TRUE)
-
-
-
-
-```
-#### Validate/Cross-Validate Best Tuning Parameters
-
-##### Create a Grid of Tuning Parameters
-```{r}
-#mtry_choice <- c(seq(1,ncol(Heart)-1,1))
-mtry_choice = c(1,2,3,4,5)
-grid_rf <- expand.grid(ntree = c(500), mtry = mtry_choice, thresh = seq(0.4,0.6,0.05), importance=F)
-grid_rf
-```
-
-##### Compare Prediction accuracy for each of the models
-```{r} 
-rf_df_output <- grid_validate(grid_df = grid_rf,  model_f = "randomForest", method = "v", classify=T)
-rf_df <- rf_df_output$grid_df
-```
-**Look at the Grid**
-```{r}
-rf_df
-```
-
-**Graph the Grid**
-
-```{r}
-plot_grid(rf_df, val_measure = "v_misclass_rate", tp1 = "mtry", tp2 = "thresh")
-```
-
-
-#### Analyse the best specification's predictions against the validation set
-
-
-
-```{r}
-best_spec_output <- get_best_spec(grid_df = rf_df, grid_validation = rf_df_output)
-graph_preds(best_spec_output$preds, best_spec_output$valids, cm=T)
-```
-#### Use Best Model To Learn About Data
-
-##### Find Variable Importance
-```{r}
-best_spec_output$row
-
-rf_fit <- randomForest(y ~ ., data = Heart_train_fold, ntree = 500, mtry = best_spec_output$row$mtry, importance = TRUE)
-
-
-varImpPlot(rf_fit)
-varImpPlot(best_spec_output$fits)
-```
-```{r}
-
-```
-
-
-##### Guage Functional Form of Conditional Probability using PDPs
-```{r}
-pred_rf <- Predictor$new(best_spec_output$fits)
-
-pdp_rf <- FeatureEffects$new(pred_rf, features = c("cp","ca", "chol", "trestbps"), method = "pdp+ice")
-
-plot(pdp_rf) 
-```
-
-```{r}
-Heart
-```
-
-#### Tidymodels Exploration
-
-```{r}
-ranger_fit <- rand_forest(trees = 100, mode = "classification") %>%
-  set_engine("ranger") %>%
-  fit(y ~ ., data = Heart_train)
-rf_fit <- rand_forest(trees = 100, mode = "classification") %>%
-  set_engine("randomForest") %>%
-  fit(y ~ ., data = Heart_train)
-```
-**Check ranger accuracy**
-```{r}
-ranger_fit %>%
-  predict(Heart_valid) %>%
-  bind_cols(Heart_valid) %>%
-  metrics(truth = y, estimate = .pred_class)
-```
-**Check randomForest accuracy**
-
-```{r}
-rf_fit %>%
-  predict(Heart_valid) %>%
-  bind_cols(Heart_valid) %>%
-  metrics(truth = y, estimate = .pred_class)
-```
-
-##### Compare choice probabilities
-
-```{r}
-Heart_probs <- ranger_fit %>%
-  predict(Heart_valid, type = "prob") %>% 
-  bind_cols(Heart_valid)
-Heart_probs
-```
-```{r}
-Heart_probs%>%
-  gain_curve(y, .pred_0) %>%
-  autoplot()
-```
-
-```{r}
-Heart_probs%>%
-  roc_curve(y, .pred_0) %>%
-  autoplot()
-```
-
-#### All in One Go
-```{r}
-
-predict(ranger_fit, Heart_valid, type = "prob") %>% # add the predicted probs
-  bind_cols(predict(ranger_fit, Heart_valid)) %>% # add the predicted class
-  bind_cols(select(Heart_valid, y)) %>% # add the class in the validation set
-  metrics(y, .pred_1, estimate = .pred_class) # calculate accuracy (correct classification rate of the +ve class)
-
-```
-
-#### Validate/Cross-Validate Best Tuning Parameters using Tidymodels
-
-##### Cross Validate
-
-
-```{r}
-# Set up the folds for 5 fold Cross-validation
-cv_folds <- vfold_cv(Heart_valid, v = 5, strata = y)
-
-# Define a tunable model (mtry is tuned, trees is fixed at 500)
-ranger_spec <- rand_forest(mtry = tune(), trees = tune(), mode = "classification") %>%
-  set_engine("ranger", probability = TRUE)
-
-# Create a workflow
-ranger_wf <- workflow() %>%
-  add_model(ranger_spec) %>%
-  add_formula(y ~ .)
-
-# Create a tuning grid
-tuning_grid <- expand.grid(
-  mtry = 1:6,
-  trees = c(500)
-)
-
-# Run grid search with predictions saved
-tune_results <- tune_grid(
-  ranger_wf,
-  resamples = cv_folds,
-  grid = tuning_grid,
-  metrics = metric_set(accuracy, roc_auc),
-  control = control_grid(save_pred = TRUE)  # <-- Save predictions!
-)
-
-
-```
-```{r}
-# Extract probability predictions
-predictions <- collect_predictions(tune_results)
-
-# View first few rows
-predictions
-```
-
-
-
-
-
-
-##### Compare Prediction accuracy for each of the models
-```{r}
-
-# Get grid of accuracy depending on choice of mtry
-param_grid <- tune_results %>%
-  collect_metrics() %>%  # Extract all metrics
-  filter(.metric == "accuracy") %>%  # Focus only on accuracy
-  mutate(cv_misclass_rate = 1 - mean) %>% # Create new column for misclass rate
-  mutate(ntree = 500)
-
-
-```
-**Look at the Grid**
-```{r}
-param_grid
-```
-**Look at the Plot**
-```{r}
-plot_grid(param_grid, val_measure = "cv_misclass_rate", tp1 = "mtry", tp2 = "trees")
-```
-
-
-
-##### Use Validation Set Approach to get best tuning Parameters
-
-```{r}
-predictors <- names(Heart)[-1]
-# Set up a set of formulae (subsets of predictors) that we can use
-selected_predictors = c(paste(as.character(predictors[1]), collapse = " + "),
-                                           paste(as.character(predictors[1:4]), collapse = " + "),
-                                           paste(as.character(predictors[1:8]), collapse = " + "),
-                                           paste(as.character(predictors[1:12]), collapse = " + "))
-formulas <- paste("y ~", selected_predictors)
-
-
-
-
-# Set up a new tuning grid with a thresh value that we can change
-tuning_grid2 <- expand.grid(
+tuning_grid_rf <- expand.grid(
   mtry = 1:6,
   trees = c(500),
   thresh = c(0.4, 0.5),
-  formula = as.character(formulas[1])
+  formula = as.character(formulas[3])
 )
-tuning_grid2$formula = as.character(tuning_grid2$formula)
-tuning_grid2
-#as.formula(tuning_grid2$formula[2])
+tuning_grid_rf$formula = as.character(tuning_grid_rf$formula)
+tuning_grid_rf
+
 ```
 
-##### Define a function that calculatevalidation set accuracy for a grid of tuning parameters.
-
-Uses tidymodels syntax efficiency
-
-Uses a helper function to get the model specification (including the fitting procedure and the engine) into tidyverse's desired format first.
+##### Compare Accuracy of Different Tuning Parameters
 
 ```{r}
-# Function to get model specification dynamically
-get_model_spec <- function(model_fitting_procedure, engine, tuning_params) {
-  if (model_fitting_procedure == "tree") {
-    model_spec_updated <- decision_tree(mode = "classification") %>%
-      set_engine(engine)  # Default engine: "tree"
-    
-  } else if (model_fitting_procedure == "random_forest") {
-    model_spec_updated <- rand_forest(mtry = tuning_params$mtry, 
-                                      trees = tuning_params$trees, 
-                                      mode = "classification") %>%
-      set_engine(engine, probability = TRUE)  # Default engine: "randomForest"
-    
-  } else if (model_fitting_procedure == "boosting") {
-    model_spec_updated <- boost_tree(mode = "classification") %>%
-      set_engine(engine)  # Default engine: "gbm"
-    
-  } else {
-    stop("Invalid model fitting procedure. Choose from 'tree', 'random_forest', or 'boosting'.")
-  }
-  
-  return(model_spec_updated)
-}
+# Run the grid validation function
+rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid_rf, "random_forest", "randomForest")
 ```
 
-```{r}
-
-
-
-grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fitting_procedure, engine) {
-  # Initialize empty data frames to store results and predictions
-  accuracy_df <- tuning_grid
-  all_preds_df <- data.frame()
-  
-  # Iterate over each combination of hyperparameters in the tuning grid
-  for(i in 1:nrow(tuning_grid)) {
-    # Extract current tuning parameters
-    tuning_params <- tuning_grid[i, ]
-    
-    # Get the model specification dynamically
-    model_spec_updated <- get_model_spec(model_fitting_procedure, engine, tuning_params)
-    
-    # Create a workflow
-    current_wf <- workflow() %>%
-      add_model(model_spec_updated) %>%
-      add_formula(as.formula(tuning_params$formula))
-    
-    # Fit the model on the training data
-    model_fit <- fit(current_wf, data = train_data)
-    
-    # Predict probabilities on the validation set
-    prob_predictions <- predict(model_fit, valid_data, type = "prob")$.pred_1
-    
-    # Apply threshold to classify predictions
-    predictions <- as.factor(as.numeric(prob_predictions > tuning_params$thresh))
-    
-    # Calculate misclassification rate
-    error <- mean(predictions != valid_data$y)
-    
-    # Store results
-    accuracy_df$misclass_rate[i] = error
-                                  
-    
-    # Store predictions
-    preds_df <- data.frame(preds = predictions) %>%
-      bind_cols(valid_data %>% select(y)) %>%
-      mutate(spec_no = i,
-             mtry = tuning_params$mtry, 
-             trees = tuning_params$trees)
-    
-    all_preds_df <- rbind(all_preds_df, preds_df)
-  }
-  
-  # Return both results and predictions
-  return(list(
-    accuracy_df = accuracy_df,
-    preds = all_preds_df
-  ))
-}
-
-rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid2, "random_forest", "randomForest")
-
-```
-##### Compare the Prediction Accuracy of Multiple Models
 
 **Look at the Grid**
 ```{r}
+
 rf_output$accuracy_df
 ```
 
@@ -1231,16 +669,73 @@ rf_output$accuracy_df
 ```{r}
 plot_grid(rf_output$accuracy_df, val_measure = "misclass_rate", tp1 = "mtry", tp2 = "thresh")
 ```
-```{r}
-# Check the predictions of the model with the lowest misclass rate
-check_preds <- rf_output$preds %>%
-  filter(spec_no == which.min(rf_output$results$misclass_rate))
-check_preds
-```
+#### Analyse Results
 
 ```{r}
-graph_preds(check_preds$preds, check_preds$y, cm=T)
+# Check the predictions of the model with the lowest misclass rate
+best_spec_idx <-which.min(rf_output$accuracy_df$misclass_rate)
+rf_fit_predictions <- rf_output$preds %>%
+  filter(spec_no == best_spec_idx)
+#check_preds
 ```
+
+##### Prediction Accuracy
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(rf_fit_predictions$preds, rf_fit_predictions$y, cm=T, scatter=F)
+```
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+rf_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+
+#### Use Best Model To Learn About Data
+
+```{r}
+
+best_spec_row <- rf_output$accuracy_df[best_spec_idx,]
+best_spec_row
+```
+
+
+##### Find Variable Importance
+```{r}
+
+
+rf_fit <- randomForest(y ~ ., data = Heart_train, ntree = best_spec_row$trees, mtry = best_spec_row$mtry, importance = TRUE)
+
+
+varImpPlot(rf_fit)
+```
+
+
+
+##### Guage Functional Form of Conditional Probability using PDPs
+```{r}
+pred_rf <- Predictor$new(rf_fit)
+
+pdp_rf <- FeatureEffects$new(pred_rf, features = c("cp","ca", "chol", "trestbps"), method = "pdp+ice")
+
+plot(pdp_rf) 
+```
+
+
+
+
+
+
+
+
+
+
 
 #### Create a function that conducts one forward or one backward stepwise iteration
 ```{r}
