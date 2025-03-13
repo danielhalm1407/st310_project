@@ -1064,10 +1064,7 @@ stepwise_df
 plot_grid(stepwise_df, val_measure = "misclass_rate", tp1 = "total_steps", tp2 = "formula")
 ```
 
-```{r}
-stepwise_selection_output2 <- stepwise_selection(Heart_train, Heart_valid, tuning_grid_step[1,], "random_forest", "randomForest",predictors_lim =2)
-stepwise_selection_output2$accuracy_df
-```
+We find 3 variable models work quite well - chol + age + trestbps being the most important
 
 
 
