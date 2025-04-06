@@ -103,10 +103,11 @@ Heart$y <- factor(Heart$y)
 
 # Get number of predictors/features
 n_preds <- sum(names(Heart) != "y")
-
-head(Heart)
-names(Heart)
 ```
+```{r, eval = F, include=F}
+head(Heart)
+```
+
 ### Cleaning
 Any cleaning we have to do
 ### Exploratory Data Analysis (EDA)
@@ -114,7 +115,7 @@ Any eda and domain-specific research
 
 #### Look at joint distribution of predictors against each other and the outcome
 
-```{r}
+```{r, eval=F, include=F}
 Heart[,1:5] |>
   ggpairs(progress = F)
 ```
@@ -157,7 +158,7 @@ outcome_counts_fold
 
 Nice, it seems rather balanced!
 
-```{r}
+```{r,eval=F, include=F}
 const_yhat_success
 ```
 
@@ -174,12 +175,12 @@ Heart_valid <- Heart_split %>% testing()
 
 **Inspect the training data**
 
-```{r, eval = FALSE}
-Heart_train
+```{r}
+head(Heart_train)
 ```
 **Inspect the validation data**
-```{r, eval= F}
-Heart_valid
+```{r}
+head(Heart_valid)
 ```
 
 
@@ -225,9 +226,9 @@ gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
   return(df)
 }
 Heart_models <- gen_models_df(accuracy_measures = c("misclass_rate"))
-
+```
+```{r, echo=F, eval=F}
 Heart_models
-
 ```
 
 
@@ -739,7 +740,7 @@ stepwise_selection_logit_df
 plot_grid(stepwise_selection_logit_df, val_measure = "misclass_rate", tp1 = "total_steps", tp2="formula", tp3="n")
 ```
 
-Here, we see that the best n = 2 variable model uses predictors cp and ca for a misclassification rate of 25%. This corresponds to the traingle (n=2 models) that is red, or the 10th step.
+Here, we see that the best n = 2 variable model uses predictors oldpeak and cp for a misclassification rate of 22.5%. This corresponds to the traingle (n=2 models) that is light blue, or the 4th step.
 
 #### Analyse Results of Best 2 Variable Model
 
@@ -778,7 +779,7 @@ glm_fit_predictions |>
   autoplot()
 
 ```
-
+It makes sense that our model used a lower cutoff probability (0.3) to assign positive values, since to achieve a higher true postive rate (sensitivity) above 0.75, we need to trade-off a larger false postive rate (1-specificity), one that is at least (just below) 25%.
 
 
 ### Gradient-Descent-Based Model: Logistic (Few Predictors)
@@ -904,9 +905,9 @@ tree_fit_predictions |>
   autoplot()
 
 ```
-#### Use Best Model To Learn About Data
+Note that the classification tree only requires that our false positive rate exceeds aprrox. 15% if we should wish to have higher than 75% classification accuracy, lower than the logit. This means that the predictive accuracy (at least within distribution) of a tree model is such that we face a **more favourable tradeoff** with diagnosing patients.
 
-
+#### Use Best Tree Model To Learn About Data
 
 ##### Look at the splits it is conducting and on what variables:
 
@@ -935,7 +936,9 @@ best_tree_fit <- fit(best_workflow, data = Heart_train)
 best_rpart_model <- extract_fit_engine(best_tree_fit)  # Gets the rpart model
 
 # Plot the tree
-rpart.plot(best_rpart_model)
+rpart.plot(best_rpart_model, roundint = FALSE) 
+# the roundint = false is used to avoid a warning that rpart Cannot retrieve the original training data used to build the model (so cannot determine roundint and is.binary for the variables)
+
 ```
 
 #### How Would this Change With Access to Limited Predictors?
@@ -988,7 +991,49 @@ Instead, a depth 8 tree works quite well. Although this is an 8 point checklist,
 
 #### Analyse Results
 
-**Extract the Chosen Specification**
+**Extract the Best Depth 4 Specification**
+```{r}
+# Check the predictions of the model with the best trade-off:
+best_spec_idx <- 21 # since this is still relatively interpretable.
+tree_fit_predictions <- tree_output$preds %>%
+  filter(spec_no == best_spec_idx)
+tree_fit <- tree_output$model_fits[[best_spec_idx]]
+#tree_output$accuracy_df[ best_spec_idx, ]
+```
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- tree_output$accuracy_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+tree_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+
+Because we have access only to limited measurements, to achieve higher than 75% accuracy, we would need to trade-off more than 25% in false postive diagnoses, which is worse even than the logit model.
+
+However, this is if we are limiting ourselves to a depth 4 (or 4-step) diagnosis process. If we increased this to 8, which is still retalively managable, we find the following.
+
+**Extract the Best Depth 8 Specification**
 ```{r}
 # Check the predictions of the model with the best trade-off:
 best_spec_idx <- 6 # since this is still relatively interpretable.
@@ -1026,46 +1071,11 @@ tree_fit_predictions |>
 
 ```
 
-This time, we must trade-off more false positives to make sure we get true positives and prevent more disease.
-
-#### Use Best Model To Learn About Data
+Here, we can see that if, in the first stage [the checklist], we are willing to sacrifice a little extra time for medical professionals to go through a slightly lengthier process (8 steps to diagnosis and not 4 steps to diagnosis), then, in the second stage [the judgement/diagnosis], we **don't need** to sacrifice as many false positive diagnoses to achieve higher accuracies. Specifically, we only need to falsely diagnose approximately 6% of patients if we wish to diagnose 75% or more patients accurately.
 
 
 
-##### Look at the splits it is conducting and on what variables:
 
-
-**Using the rpart engine**
-
-```{r}
-# Define the best model specification
-best_model_spec <- decision_tree(
-  mode = "classification", 
-  cost_complexity = best_params$cp,  # Cost-complexity pruning
-  tree_depth = best_params$maxdepth,  # Max depth of tree
-  min_n = best_params$min_n  # Minimum number of observations per node
-) %>%
-  set_engine("rpart")
-
-# Create workflow
-best_workflow <- workflow() %>%
-  add_model(best_model_spec) %>%
-  add_formula(as.formula(best_params$formula))
-
-# Fit the model to full training data
-best_tree_fit <- fit(best_workflow, data = Heart_train)
-
-# Extract the fitted model
-best_rpart_model <- extract_fit_engine(best_tree_fit)  # Gets the rpart model
-
-# Plot the tree
-rpart.plot(best_rpart_model)
-```
-
-#### Validate/Cross-Validate Best Tuning Parameters
-Run some code
-#### Analyse Results
-Look at results from best Model
 
 
 
@@ -1080,7 +1090,30 @@ Look at results from best Model
 
 ### Predictively Accurate Model: Classification Random Forest
 
+Earlier, we evaluated how a single tree model could result in a more-desirable trade-off of more false positive diagnoses in return for more true postive diagnoses compared to a logit, but **only** if either we had access to measurements that are less practical to gather from a patient, **or** we were willing to extend the depth and complexity of the tree, and hence, the time it would take for a medical professional to carry out a step-based 'checklist' diagnostic process.
 
+However, in many environments today (including even in emerging economies or in the field), medical professionals have access to computer hardware and software that may be sufficient to run predictive models on new patient data to predict conditional probabilities for patients. This eliminates the need for a step-based 'checklist' process, and allows diagnoses to be made systematically fora large number of patients in one go.
+
+Of course, medical professionals still have to gather the data from patients, which means that we should still give priority to models that support the practicality of this part of the process. In other words, we will place priority on model specifications which use:
+
+- Fewer measures (that thus take less time to collect)
+- Measures that are more practical to collect on the spot.
+
+It therefore makes sense to consider models that may be more complex and less interpretable, but offer benefits to predictive accuracy (with a desireable trade-off) and practicality that make them more applicable for diagnosis (although perhaps not as interpretable for prescribing treatment).
+
+For this, we choose to use a **random forest** model, which has a few predictive advantages:
+
+- **Low bias**, because it uses the predictions of numerous trees that are grown deep and so can fit the complex patterns in the data more closely.
+
+- **Low variance**, because it averages out the predictions of a large number of trees, each fitted on a bootrapped (i.e., subsample with replacement) subsample of the training dataset.
+
+- **Low variance**, because (unlike **bagging**) it allows splits only on a certain subset of predictors, meaning that each tree is less correlated with the next.
+
+These combine to create a model that has **high predictive accuracy** on **new** data, and, ideally, not just on new data from our dataset (i.e., can be used to generalise in the distribution), but also from new datasets (which may be out of distribution, to the extent that the underlying relationships have changed). 
+
+In other words, such a fitting procedure should capture as accurately the **fundamental** or **structural** relationships between the variables that do not change throughout time, as opposed to the **transitory** or **reduced form** relationships. 
+
+Using a validation set approach, we can only guarantee the former, but argue that the fact that the human body works much in the same way today than it did many decades ago means that much of the relationships we capture hold true throughout time.
 
 
 #### Validate Best Tuning Parameters
@@ -1137,13 +1170,16 @@ graph_preds(rf_fit_predictions$preds, rf_fit_predictions$y, cm=T, scatter=F)
 
 **Look at ROC Curve to guage Cut-Off Trade-Off**
 
-```{r, eval=F}
+```{r}
 rf_fit_predictions |>
   roc_curve( truth = y, prob_preds,
             event_level = "second") |>
   autoplot()
 
 ```
+Because predicted classes can only be 100% accurate of 0% accurate **for a given observation** (the outcome can take a value of 0 or 1), then even if the continuous predicted conditional probabilities may be slightly different to their true values, it is entirely possible that we classify every observation in a validation set to its true class, especially if we don't have too many observations, and if the data generating process makes patients in the positive class quite distinguishable from those in the negative class.
+
+Thus, the fact that there is no-need to sacrifice false positives for diagnostic accuracy means that this model class provides a highly desireable trade-off that is genuine.
 
 #### Use Best Model To Learn About Data
 
@@ -1163,19 +1199,25 @@ rf_fit <- randomForest(y ~ ., data = Heart_train, ntree = best_spec_row$trees, m
 
 varImpPlot(rf_fit)
 ```
+Although there are no splits or coefficients to use to interpret the predictive contribution of each variable, we can still use less interpretable, more abstract measures of variable importance.
 
+The above charts show that the 'most important' variables in terms of their contribution towards marginally increasing the strength of fit for the random forest model include *oldpeak* (short term depression induced by exercise relative to rest), *thalach* (maximum heart rate achived), *age*, *chol* (blood cholesterol levels), and *trestbps* (resting bloob pressure). 
+
+This makes intuitive sense, since being unaccustomed to exercise, having high cholesterol and blood pressure, and simply being older are commonly understood to cause heart disease, so measures of these should be good predictors. These plots do not validate the causal effect, but serve to inform about prediction/diagnosis.
+
+The last 3 are practical measures that are easy to collect in a relatively short space of time, motivating the benefits of this model.
 
 
 ##### Guage Functional Form of Conditional Probability using PDPs
 ```{r}
 pred_rf <- Predictor$new(rf_fit)
 
-pdp_rf <- FeatureEffects$new(pred_rf, features = c("cp","ca", "chol", "trestbps"), method = "pdp+ice")
+pdp_rf <- FeatureEffects$new(pred_rf, features = c("oldpeak","thalach", "age", "chol"), method = "pdp+ice")
 
 plot(pdp_rf) 
 ```
 
-
+Unfortunately, each individual predictor only appears to have a small marginal/partial effect on the probability of having heart disease. Instead, its *conditional* effects may be more important.
 
 
 
@@ -1217,6 +1259,8 @@ plot_grid(stepwise_rf_df, val_measure = "misclass_rate", tp1 = "total_steps", tp
 
 We find that the second 2 variable variable random forest model (3 forward steps and 2 backward steps and then another forward step) works quite well - chol + thalach being the most accurate.
 
+
+
 #### Analyse Results of Best 2 Variable Model
 
 **Extract the Chosen Specification**
@@ -1255,7 +1299,9 @@ stepwise_rf_fit_predictions |>
 
 ```
 
-Unlike with the logit, we don't face nearly as steep a trade-off with false positives.
+Unlike with the logit, we don't face nearly as steep a trade-off with false positives. Achieving over 75% accuracy requires only an approximately 3% false positive rate.
+
+Moreover, this model can be used to conduct highly practical diagnoses, since it only requires taking two pieces of data from the patient that can each be accurately collected in a short space of time.
 
 ## Conclusion
 
