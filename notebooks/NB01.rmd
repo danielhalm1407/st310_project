@@ -801,7 +801,7 @@ This is because instead of using a complicated functional form for how the outco
 
 Each of these splits is created in such a way to maximise node purity. This is done by assigning the predicted probability of the positive class conditional on being in that node (and having predictor values that put a patient in that grouping) as the proportion of training observations in the positive class. 
 
-It then seeks to achieve maximum node purity by minimising the Gini Index, which takes its smallest values (closest to 0) if either all the predicted probabilities are close to 1, or all of them are close to 0. Intuitively, it can be seen that when a grouping is more 'pure' (i.e., the observations tend to have more similar outcomes), then it makes more sense for a tree to define a split that creates such a grouping, and consequently associate the characteristics that put a patient into that group as characteristics associated with the probability of the positive class in that group.
+It then seeks to achieve maximum node purity by minimising the Gini Index, which takes its smallest values (closest to 0) if either all the predicted probabilities are close to 1, or all of them are close to 0 (James, Witten, Hastie, & Tibshirani, 2023). Intuitively, it can be seen that when a grouping is more 'pure' (i.e., the observations tend to have more similar outcomes), then it makes more sense for a tree to define a split that creates such a grouping, and consequently associate the characteristics that put a patient into that group as characteristics associated with the probability of the positive class in that group.
 
 This ultimately creates discrete, mutually exclusive and collectively exhaustive final groupings/nodes, each of which have certain characteristics.
 
@@ -815,13 +815,43 @@ At each subsequent 'depth' level in the checklist, another piece of information 
 
 Based on this grouping, and the charactestics associated with being in that grouping, the medical professional can predict the chance (conditional on those characteristics) that that patient will have heart disease. If this probability is sufficiently high, a positive diagnosis can be given.
 
-In the case of heart disease diagnosis, we might not simply want the highest accuracy, but perhaps particularly avoid false negatives. 
+In the case of heart disease diagnosis, we might not simply want the highest accuracy, but perhaps particularly avoid false negatives (and maximise true positives, even at the cost of false positives). This depends, of course, on the treatments prescribed to the patient.
 
-On the one hand, false positives may cause undue stress, when someone is misleadingly worried about heart disease that they may not have. However, in general it will tend to have positive effects anyway, since most prescriptions to combat the disease do not have negative outcomes and come at large personal benefits relative to any costs. Eating less sugar and saturated fat leads to a slight quality of life reduction in the short term, but a healthier lifesile has substatial benefits and often improves quality of life in the long term and that derived from profound and not superficial pleasures. However, to the extent that prescriptions are more severe in their nature, such as stents (medicine) or operations, we must approach this with great care,
+**Treatments often fall into one of the below groupings:**
+[Sourced from (British Heart Foundation, 2025) (NHS, 2025) (Mayo Clinic, 2025)]
 
-On the other hand, it is likely worth trading off more false negatives in exchange for more true positives so that a greater amount of corrective treatment can be prescribed, and so that we can prevent the conditions of more patients getting worse.
+1. **Lifestyle Changes**
+ - Exercise (Strengthen your heart muscles and widen blood vessels)
+ - Healthy Eating (Target the root cause)
+ - Ceasing to smoke (Improve your body's functioning)
+ 
+2. **Medicines**
+ - Blood Thinners (To prevent blood clotting and blocking blood vessels)
+ - Statins (To lower cholesterol)
+ - Beta Blockers (To slow Heartbeat and improve blood flow using hormones)
+ - Nitrates (To widen Blood Vessels)
+ - ACE Inhibitors or ARBs (Reduce a hormone that would cause blood vessels to narrow)
+ - Calcium Chanel Blockers (Relax Muscles on the walls of arteries, making them wider)
+ 
+3. **Surgical Procedures**
+[Usually only implemented with a check on a coronary angiogram]
+ - Coronary Angioplasty (Small balloon inflated to push fatty tissue of a narrowed blood vessel outwards, improving blood flow)
+ - Bypass Surgery (CABG) (A new blood vessel is inserted to bypass a blocked section of an existing vessel)
+ - Heart Transplant (Replace the patient's disfunctional heart with one that works better)
+ 
+ 
 
-Likewise, any non-professional (perhaps a patient themselves) could also use such a flow chart structure to identify their own chance of a positive diagnosis/ what factors tend to be most associated with high risk of heart disease.
+On the one hand, false positives may cause undue stress, when someone is misleadingly worried about heart disease that they may not have.
+
+If prescribed treatment is benign, such as in the case of lifestyle changes, it will make sense to be less cautious about coming to a positive diagnosis, because taking on this prescription will at best come at large personal benefits and at worst incur marginal costs relative to those benefits. Eating less sugar and saturated fat leads to a slight quality of life reduction in the short term, but a healthier lifestyle has substantial benefits and often improves quality of life in the long term and that derived from profound and not superficial pleasures, even if a patient does not yet have nor is at risk of heart disease. 
+
+This applies also to more mild medicine prescriptions, with side-effects extending from negligible symptoms to some only as severe as dizziness, headaches and fatigue (ibid).
+
+However, to the extent that treatments are more severe in their nature, such as stronger medicines or surgical procedures, we may wish to use a higher threshold to avoid the consequences of prescribing treatment to someone who was not at risk. Moving forward, due to the fact that variables in our data has not been previously used to prescribe surgical treatment, and the binary nature of our outcome variable has no indication of the severity of heart disease, which would be essential in this application, we will only consider the applications for diagnosis that results in lifestyle change and medicine prescriptions.
+
+On the other hand, it is likely worth trading off more false negatives in exchange for more true positives so that a greater amount of corrective treatment can be prescribed, and so that we can prevent the conditions of more patients getting worse (even if they have yet to truly have coronary heart disease).
+
+Likewise, any non-professional (perhaps a patient themselves, or a trainee) could also use such a flow chart structure to identify the chance of a positive diagnosis/ what factors tend to be most associated with high risk of heart disease, making it more practical to diagnose on a larger scale.
 
  
 #### Start With Splits on All Possible Predictors
@@ -1105,15 +1135,27 @@ For this, we choose to use a **random forest** model, which has a few predictive
 
 - **Low bias**, because it uses the predictions of numerous trees that are grown deep and so can fit the complex patterns in the data more closely.
 
-- **Low variance**, because it averages out the predictions of a large number of trees, each fitted on a bootrapped (i.e., subsample with replacement) subsample of the training dataset.
+- **Low variance**, because it averages out the predictions of a large number of trees, each fitted on a bootstrapped (i.e., sampled with replacement) subsample of the training dataset.
 
-- **Low variance**, because (unlike **bagging**) it allows splits only on a certain subset of predictors, meaning that each tree is less correlated with the next.
+- **Low variance**, because (unlike **bagging**, a special case of **random forests**) it allows splits only on a certain subset of predictors, meaning that each tree is less correlated with the next, and so is less likely to amplify overfitting to our data.
 
-These combine to create a model that has **high predictive accuracy** on **new** data, and, ideally, not just on new data from our dataset (i.e., can be used to generalise in the distribution), but also from new datasets (which may be out of distribution, to the extent that the underlying relationships have changed). 
+These combine to create a model that has **high predictive accuracy** on **new** data, and, ideally, not just on new data from our our same wider dataset (i.e., can be used to generalise in the distribution), but also from new datasets (which may be out of distribution, to the extent that the underlying relationships have changed). 
 
-In other words, such a fitting procedure should capture as accurately the **fundamental** or **structural** relationships between the variables that do not change throughout time, as opposed to the **transitory** or **reduced form** relationships. 
+In other words, such a fitting procedure should capture as accurately the **fundamental** or **structural** relationships between the variables that do not change throughout time, as opposed to the **transitory** or **reduced form** relationships.This means that the **low bias** feature of our flexible model fitting procedure is particularly useful for this out of distribution generalisation.
 
-Using a validation set approach, we can only guarantee the former, but argue that the fact that the human body works much in the same way today than it did many decades ago means that much of the relationships we capture hold true throughout time.
+Using a validation set approach, we can only guarantee the former, that we can generalise well within distribution. We aim to avoid too much 'optimism' (encouraging our empirical risk to consistently underestimate the true risk), by avoiding the use of excessive degrees of freedom, yet also using sufficient predictors to reduce the irreducible error (we want it to be the case that a true function *of these predictors* is as good at predicting heart disease as possible).
+
+We do this by choosing the tuning parameters and model specification to maximise validation (and not training) set accuracy. In other words, we attempt to ensure we capture the underlying relationships *in our wider data* as much as possible without just falsely misinterpreting the random noise or intricacies of the training subset *of our data* as signals of the underlying relationship. 
+
+As for the latter, we argue that the fact that the human body works much in the same way today than it did many decades ago (NHS, 2025) (National Institutes of Health, 2025) means that much of the relationships we capture hold true throughout time. Although the distribution and data generating process today has some differences to the time when the data was gathered, it is still similar to the distribution of our dataset, given that the structural biological relationships still hold.
+
+However, the distribution and data generating process for a population in a different geographical area with therefore a different corresponding hereditary background is more likely to be fundamentally different to the narrow population in our dataset at any given point in time, because hereditary (gene-related) characteristics will are more likely to affect the relationships and more significantly and systematically so (British Heart Foundation, 2025). To the extent that these differences have a minor aggregate effect, the distributions of our data and this outside sample are still similar.
+
+In particular, we argue that between our Cleveland sample and the wider US, we may introduce more variation in hereditary factors that slightly alter the idiosyncratic relationships, and thus increase irreducible error (our model does not account for these factors, so will simply mis-estimate a little more). However, these will not be *systematically* different to those in our Cleveland sample, so will mean that our estimate of the data generating process is not *systematically wrong* or biased. 
+
+
+
+
 
 
 #### Validate Best Tuning Parameters
@@ -1179,7 +1221,7 @@ rf_fit_predictions |>
 ```
 Because predicted classes can only be 100% accurate of 0% accurate **for a given observation** (the outcome can take a value of 0 or 1), then even if the continuous predicted conditional probabilities may be slightly different to their true values, it is entirely possible that we classify every observation in a validation set to its true class, especially if we don't have too many observations, and if the data generating process makes patients in the positive class quite distinguishable from those in the negative class.
 
-Thus, the fact that there is no-need to sacrifice false positives for diagnostic accuracy means that this model class provides a highly desireable trade-off that is genuine.
+Thus, the fact that there is no-need to sacrifice false positives for diagnostic accuracy means that this model class provides a highly desirable trade-off that is genuine.
 
 #### Use Best Model To Learn About Data
 
@@ -1308,6 +1350,16 @@ Moreover, this model can be used to conduct highly practical diagnoses, since it
 Did we achieve our objective? Why/Why not?
 
 ## Bibliography
+
+Bibliography
+British Heart Foundation. (2025, March). Family History of Heart and Circulatory Diseases (BHF). Retrieved from British Heart Foundation: https://www.google.com/search?q=have+the+same+factors+always+caused+heart+disease&newwindow=1&sca_esv=0472b01422b69ec8&sxsrf=AHTn8zr-98IX2GHtRBseo7vSVFNLi-K4ig%3A1744452819588&ei=0zz6Z5vRI7qDhbIPyoWukAo&ved=0ahUKEwjbho6VodKMAxW6QUEAHcqCC6IQ4dUDCBE&uact=5&
+British Heart Foundation. (2025, April 12). Medicines for Heart Conditions - Treatments. Retrieved from British Heart Foundation: http://bhf.org.uk/informationsupport/treatments/medication#:~:text=Holidays%20and%20travel-,Types%20of%20medicine%20for%20heart%20conditions,SGLT2%20inhibitors.
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (2023). An Introduction to Statistical Learning with Applications in R. 
+Mayo Clinic. (2025, March). Heart disease - Diagnosis and treatment - Mayo Clinic. Retrieved from Mayo Clinic: https://www.mayoclinic.org/diseases-conditions/heart-disease/diagnosis-treatment/drc-20353124
+National Institutes of Health. (2025, March). Bioengineering and the Cardiovascular System - PMC. Retrieved from NIH.org: https://www.google.com/search?q=have+the+biological+fundamentals+of+the+human+body+with+respect+to+heart+disease+changed+in+the+last+50+years&newwindow=1&sca_esv=0472b01422b69ec8&sxsrf=AHTn8zpnxWNSxCZU6jBsjJANayje5PMEag%3A1744457102261&ei=jk36Z8baD62ahbIP
+NHS. (2025, March). Coronary Heart Disease - Causes. Retrieved from NHS: https://www.nhs.uk/conditions/coronary-heart-disease/causes/#:~:text=Coronary%20heart%20disease%20(CHD)%20is,have%20diabetes
+NHS. (2025, April). Coronary heart disease - Treatment. Retrieved from NHS: https://www.mayoclinic.org/diseases-conditions/heart-disease/diagnosis-treatment/drc-20353124
+
 
 
 ## Annex
