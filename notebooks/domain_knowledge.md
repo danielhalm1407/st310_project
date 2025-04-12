@@ -28,6 +28,26 @@ Coronary artery disease is the leading cause of death across both genders in the
 
 Although this disease is dangerous current medicine is advance enough to make it preventable through medications, interventions, and lifestyle changes. Therefore, it is essential for physicians to find ways to accurately diagnose the right patients with heart disease before it becomes too severe. Unfortunately, like mentioned before, the vulnerable members of society (people of color, women, LGBTQ+) are often overlooked and therefore underdiagnosed and undertreated, adding to these large fatality figures. 
 
+#### What is the significance of our models? What are we trying to do?
+
+(in progress)
+
+#### What does "interpretable" modeling mean in medicine?
+
+(in progress)
+
+#### What are the consequences of false positives or false negatives?
+
+(in progress)
+
+#### What are the ethical concerns around predicitive models for health?
+
+(in progress)
+
+#### What effect does {all the predictors} have on heart disease?
+
+(have rough notes finished, working on converting to paragraph form with citations now)
+
 [1]: https://www.heart.org/en/health-topics/heart-failure/warning-signs-of-heart-failure
 [2]: https://www.nhs.uk/conditions/cardiovascular-disease/
 [3]: https://www.mayoclinic.org/diseases-conditions/coronary-artery-disease/symptoms-causes/syc-20350613
