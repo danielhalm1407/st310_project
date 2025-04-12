@@ -1,74 +1,45 @@
-#### How is heart disease defined?
+# Healthcare Domain Knowledge
 
-+ UCI dataset stems from /angiographic results/, that is, imaging of the coronary arteries
-+ Heart disease is defined as the presence of significant narrowing (stenosis), usually 50%+, in the coronary arteries
-+ Coronary artery disease (CAD) most common form of heart disease
-+ Early identification helps prevent heart attacks and allows targeted intervention (stenting, lifestyle changes)
+#### Why is the heart important and how is heart disease defined?
 
-#### Why is heart disease "bad"?
+The human heart persistently supplies blood throughout the body through the circulatory system so our organs can operate. However, the heart is still susceptible to injuries, which can be intensely damaging or even life-threatening. Excess fluid in body tissues, impaired thinking, and sudden weight changes are some indicators of a failing heart.[1] Understanding what causes and further exacerbates heart problems is crucial for patient health.
 
-+ No. 1 leading cause of death worldwide, more than any other condition GLOBALLY
-+ Accounts for 1 in 5 deaths in the US
-+ Accounts for 1 in 8 men and 1 in 14 women, slightly behind alzheimers/dementia [british heart foundation factsheet]
-+ Eventually leads to serious outcomes such as heart attacks, heart failure, stroke, and sudden cardiac death
-+ Develops silently over years with no symptoms, usually find out from first heart attack
-+ Reduces quality of life by limiting physical activity, fatigue, shortness of breath, chest pain, and even long-term disability or hospitalization
-+ Can be preventable but usually underdiagnosed and undertreated in younger people, women, and minority communities
+There are several types of heart disease including strokes and transient ischaemic attacks, peripheral arterial disease, and cortic diseases; however, this study focuses on coronary artery disease (CAD), which is caused when the heart is strained by reduced or blocked oxygen-rich blood flow.[2] A buildup of plaque (atherosclerosis) caused primarily by cholesterol and fats shrink the arteries over several years, eventually culminating in CAD through chest pain (anginas), heart attacks, and heart failure.[3]
 
-#### What is the significance of our models?
+#### Where is our dataset from and what can we understand from it? What are its limitations?
 
-+ Heart disease is preventable (via medication, treatments, and lifestyle changes), however, getting screened can be expensive or [annoying] which adds to the underdiagnosed and undertreated figures particularly in more vulnerable populations
-+ If doctors were to collect easier measurements (such as resting heart rate, cholesterol levels, etc.) in a regular checkup appointment, they could then run these measurements into our model and compare
-+ The limitation is that our model trained on Cleaveland hospital data in the United States from 1988:
-  - Food and drug regulations have changed since then to account for new chemicals in food production, which could influence the measurements doctors seek to collect (either positively or negatively)
-  - Cultural differences in exercise and cuisine can drastically set two populations apart
-  - Differences in climate like heat can exert a different physical toll
-  - Data is from one state in one country and so the likelihood of diversity and accurately representing global characteristics is likely not effective (consider a middle-age white American versus young black Senegalese versus senior Korean)
-  - Majority of data are from men, which can be dangerous for women who are underrepresented
+A 1988 heart disease study from the University of California Irvine created a discriminant function model for predicting angiographic coronary disease in patients and compared the results to a Bayesian algorithm.[4] It is common for doctors and researchers to get an X-ray scan of a patient’s heart to detect the presence or absence of angiographic coronary disease by checking if the blood vessels are sufficiently open and unblocked.[5] The result of an angiography is either heart disease is present or absent. This study collected patient results from angiographies and relevant health diagnostics to create their predictor model.[6]
 
-#### What effect does age have on heart disease?
+The original study by Detrano et al. (1989) aggregated patient data from the Cleveland Clinic (303 patients); Budapest, Hungary (425 patients); Zurich and Basel, Switzerland (143 patients); and the Veterans Administration Long Beach, California (200 patients). We were only able to make use to the Cleveland Clinic subset which had 1,025 observations.
 
-+ One of the strongest and most consistent risk factors
-+ Biological and lifestyle-related changes increases risk of CAD
-+ Arteries stiffen and lose elasticity which increases blood pressure and strain on the heart
-+ Plaque-forming from too much cholesterol is a cumulative process
-+ Electrical signals controlling the heart can slow down or become erratic
-+ Immune system becomes less efficient at repairing damaged blood vessels thereby weakening them
-+ Other comorbidities such as diabetes, hypertension, and obesity can form as one gets older
-+ Risk of CAD increases steeply after 45 for men and 55 for women (though often underdiagnosed)
+Although these data were collected from a large study and helped researchers understand more in understanding coronary artery disease, there are some important limitations in the data to consider. These data were published in 1988 and, at the time of this report, important medical, political, social, and environmental advancements have been made in the past 37 years. *[advancements such as what? environmental changes such as more pollution, newer medical tests and measurements related to heart health, new policies to encourage healthier ingredients and foods, etc. -- find reputable sources to support claims.]*
 
-#### What effect does cholesterol have on heart disease?
+Additionally, our dataset has a lot more men (713) then women (312) which could suggest that models fitted on these data will skew to accommodate male measurements better. This can be dangerous since women, as well as other vulnerable communities, are often overlooked in the medical community compared to white men.[10][11]
 
-+ Waxy, fat-like substance found in blood
-+ Essential for building cells and hormones
-+ One of the primary risk factors
-+ Too much cholesterol forms plaque (atherosclerosis) on the artery walls, effectively narrowing them and reducing oxygen-rich blood flow to the heart
-+ A ruptured plaque can trigger a clot which fully blocks the artery and leading to a heart attack (myocardial infarction)
+Finally, these data were collected in one hospital in one state in one country, so the data likely represents that particular area well but maybe not the global population. A patient from humid continental Ohio is likely very different from a patient in the Mediterreanean climate of Algeria. If we strive to use our models to help patients around the globe, we need a more diverse dataset ranging across cultures, climates, nations, and peoples.
 
-#### What effect does sex have on heart disease?
+#### How is heart disease diagnosed in practice?
 
-+ Men at higher risk of developing heart disease earlier in life, women later often after menopause
-+ Estrogen is protective; men have low amounts and women have higher amounts pre-menopause
-+ Men have larger vessels than women
+Doctors diagnose heart disease by a mix of patient-reported symptoms, common physical examinations, and different diagnostic tests based on their findings. Electrocardiograms (EKGs) are a non-invasive procedure that measure the heart muscle's electrical activity and is common for identifying irregular heartbeats (arrhythmias) and poor blood flow (ischemia).[7] Physicians usually have patients do two EKG tests while they are resting and while exercising (called a stress test) to see how the heart performs under exertion to properly identify if they have heart disease and its severity. Another common non-invasive diagnostic tool is an echocardiogram which uses high-frequency sound waves, an ultrasound, to scan the heart and nearby blood vessels in real time.[8] These "echos" help cardiologists get an overview of the structural health of a patient's heart which is vital when recovering from cardiovascular damage. The standard of care, however, is a coronary angiography where contrast dyes are injected through coronary arteries and X-rays identify blockages; unlike the aforementioned procedures, an angiography is invasive however provides more actionable value to the physians.[9] These procedures are quick enough that patients can return home on the same day with little impact to their normal routine. Features present in the UCI Heart Disease dataset such as `slope`, `cp`, and `thalach` are measurements as a result of these medical diagnostic tests, whereas other features like `sex`, `age`, and `cholesterol` are recorded from physical examinations. Doctors then take these measurements are use their extensive domain knowledge to conclude if a patient has coronary artery disease or not. Their conclusions are supported by test results and by comparing medical measurements, such as cholesterol, with what is medically accepted to be a "safe" or "healthy" amount in someone of a similar sex, age, and other morphometric characteristics.
 
-#### What effect does resting blood pressure achieved (trestbps) on heart disease?
+#### Why is heart disease "bad" and why is it such a prevalent issue?
 
-+ Resting systolic blood pressure (mm Hg) easily collected at a clinic
-+ Hypertension (higher resting blood pressure) is a major risk factor in developing CAD:
-  - High pressure weakens and scars arterial walls
-  - Plaque can more easily build up
-  - Heart needs to pump faster to move blood which causes the muscle to thicken and become less efficient; compounded on age makes it even riskier
-  - Correlates with other conditions such as obesity, diabeties, and high cholesterol which adds strain to the heart and coronary arteries
-  - Values above 130--140 are generally considered elevated or hypertensive
+Coronary artery disease is the leading cause of death across both genders in the United States and the second leading cause of death (behind Alzheimer's/dementia) across both genders in the United Kingdom.[12][13] For context, 1 in 8 men and 1 in 14 women die from CAD for an average of one person dying every 8 minutes.[14] Since artery disease builds up over years it is a silent disease and the first symptoms are usually severe like chest pain or even a heart attack. Eventually CAD reduces a patient's quality of life because the strain on the heart limits their physical activity, causes fatigue, strong chest pain, and even long-term disability or hospitalization.[15]
 
-#### What effect does maximum heart rate achieved (thalach) on heart disease?
+Although this disease is dangerous current medicine is advance enough to make it preventable through medications, interventions, and lifestyle changes. Therefore, it is essential for physicians to find ways to accurately diagnose the right patients with heart disease before it becomes too severe. Unfortunately, like mentioned before, the vulnerable members of society (people of color, women, LGBTQ+) are often overlooked and therefore underdiagnosed and undertreated, adding to these large fatality figures. 
 
-+ Gathered using a stress test
-+ Lower heart rates can indicate cardiac limitations from reduced oxygen delivery from narrowed arteries, medications, or underlying muscle dysfunction
-
-#### What effect does fasting blood sugar (fbs) on heart disease?
-
-+ Recorded blood sugar levels at least 8 hours after last meal
-+ Reflects effectiveness of glucose regulation and signals prediabities or diabeties
-+ Diabetes accelerates plaque buildup since high blood sugar dmages the endothelial lining of arteries
-+ Limitations from dataset: since it is binary, we do not know the relative amounts of how elevated the numbers are (say +5 mg/dL or +28 mg/dL?)
+[1]: https://www.heart.org/en/health-topics/heart-failure/warning-signs-of-heart-failure
+[2]: https://www.nhs.uk/conditions/cardiovascular-disease/
+[3]: https://www.mayoclinic.org/diseases-conditions/coronary-artery-disease/symptoms-causes/syc-20350613
+[4]: https://doi.org/10.1016/0002-9149(89)90524-9
+[5]: https://www.mayoclinic.org/tests-procedures/coronary-angiogram/about/pac-20384904
+[6]: https://doi.org/10.1016/0002-9149(89)90524-9
+[7]: https://www.bhf.org.uk/informationsupport/heart-matters-magazine/medical/tests/electrocardiogram-ecg
+[8]: https://www.nhs.uk/conditions/echocardiogram/
+[9]: https://www.nhs.uk/conditions/coronary-angiography/
+[10]: https://www.sciencedirect.com/science/article/abs/pii/S0147956395800204
+[11]: https://my.clevelandclinic.org/health/articles/23051-ethnicity-and-heart-disease
+[12]: https://www.bhf.org.uk/-/media/files/for-professionals/research/heart-statistics/bhf-cvd-statistics-uk-factsheet.pdf?rev=81a8015761aa4ced8bc39d7045202be5&hash=9D78ACBF5EB80FA8A9BE28C90BFBE171
+[13]: https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html
+[14]: https://www.bhf.org.uk/-/media/files/for-professionals/research/heart-statistics/bhf-cvd-statistics-uk-factsheet.pdf?rev=81a8015761aa4ced8bc39d7045202be5&hash=9D78ACBF5EB80FA8A9BE28C90BFBE171
+[15]: https://www.pennmedicine.org/for-patients-and-visitors/patient-information/conditions-treated-a-to-z/coronary-artery-disease
