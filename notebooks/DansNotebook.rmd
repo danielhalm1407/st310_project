@@ -1,0 +1,1373 @@
+---
+output: html_document
+---
+
+# ST 310 Group Project: Predicting Presence of Heart Disease in Patients
+
+**Candidate Numbers:**
+
+
+
+## Outline/Contents
+
+
+
+
+## Introduction
+
+### The Dataset
+Where from, vars used etc etc
+
+### What We Aim to Achieve
+Motivations and objectives
+
+## Set Up
+
+### Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# General
+library(dplyr) # for filtering and sorting to be easier.
+library(rstudioapi) # to set the correct working directory
+
+
+
+# Fitting Models
+#library(tidyverse)
+library(ISLR) # to get all the data and models from ISLR to experiment
+library(gam) # to fit gams
+library(tree) # for tree fitting to guage the functional form of the data
+library(randomForest) # for random forest fitting
+library(ranger) # for random forest fitting
+library(MASS) # for QDA and LDA
+library(e1071) # to fit a naive bayes GMC.
+
+# Plotting/ Visualisation
+library(ggplot2) # for maintainable plots with a lot of interactability
+library(yardstick) # for plotting an ROC curve
+library(iml) # To get PDPs from a random forest
+library(GGally) # to make various two-way plots
+library(rpart.plot) # to display trees generated from the rpart engine
+
+# Easier Analysis
+library(tidymodels) # Allows easy model fitting and multi-parameter tuning
+library(purrr) # So that I can iterate over custom thresholds to assign class
+library(rsample) # to allow parameter tuning using tidymodels
+
+# Resolve package conflicts (basically avoid having to us dplyr::select all the time)
+library(conflicted)
+
+conflict_prefer("select", "dplyr")
+conflicts_prefer(dplyr::filter)
+conflicts_prefer(yardstick::accuracy)
+conflicts_prefer(base::as.matrix)
+conflicts_prefer(tree::tree)
+conflicts_prefer(plyr::id)
+conflicts_prefer(dplyr::rename)
+conflicts_prefer(e1071::tune)
+conflicts_prefer(dplyr::mutate)
+conflicts_prefer(dplyr::count)
+conflicts_prefer(rpart::prune)
+conflicts_prefer(randomForest::margin)
+```
+
+### Directories/Paths
+#### Set the current directory to the working directory
+```{r}
+setPath <- dirname(getSourceEditorContext()$path)
+
+setwd(setPath)
+getwd()
+```
+
+#### Set the path for the data and predictions
+```{r, echo=FALSE}
+# Change data_path to where I saved the data
+data_path <- paste0(getwd(),"/../data/")
+predictions_path <- paste0(getwd(),"/../predictions/")
+
+```
+
+### Load Data
+```{r}
+Heart <- read.csv(paste0(data_path, "Heart.csv"))
+# Rename the outcome column to y
+Heart <- Heart %>% rename(y = target)
+
+# Move the last column to the front so that the cross-validation works
+Heart <- Heart[, c(ncol(Heart), 1:(ncol(Heart) - 1))]
+
+# Change y to be factor so that  it is recognised as classification
+Heart_non_fctr <- Heart
+Heart$y <- factor(Heart$y)
+
+# Get number of predictors/features
+n_preds <- sum(names(Heart) != "y")
+```
+```{r, eval = F, include=F}
+head(Heart)
+```
+
+### Cleaning
+Any cleaning we have to do
+### Exploratory Data Analysis (EDA)
+Any eda and domain-specific research
+
+#### Look at joint distribution of predictors against each other and the outcome
+
+```{r, eval=F, include=F}
+Heart[,1:5] |>
+  ggpairs(progress = F)
+```
+
+```{r}
+for (i in seq(2,n_preds,3)) {
+  plot <- ggpairs(
+    Heart[, c(i:(min(n_preds,i + 2)), 1)], 
+    progress = FALSE
+  ) + 
+    theme_minimal()
+  
+  print(plot)
+}
+```
+
+Note in the above that the distribution of most of the integer variables appear to have a discrete gaussian/bell-curve type distribution within each class (with the exception of trestbps (resting blood pressure)). 
+
+Moreover, the distributions for both integer and factor variables can be distinct conditional on each class.Where the distributions are conditionally gaussian, this implies that both the mean and covariance for each class is different for each class, possibly motivating a QDA.
+
+
+However, this is not precisely a normal (conditional on y), limiting the possible usefulness of QDA as a model fitting procedure.
+
+Naive bayes also appears a dud, as we often observe high correlations between the features/predictors across both classes, and naturally this is likely to extend to high correlations within class as well. Therefore, we cannot make the necessary argument that the predictors are independent within a given class.
+
+## Model Fitting
+
+### Set Up
+
+#### Look at the Class Balance in Our Data
+
+
+```{r}
+# We need the training set to be balanced, yet the validation set to have 68% balance.
+outcome_counts_fold <- Heart |> count(y)
+outcome_counts_fold$proportion <- outcome_counts_fold$n / sum(outcome_counts_fold$n)
+const_yhat_success <- outcome_counts_fold$proportion[[2]]
+outcome_counts_fold
+```
+
+Nice, it seems rather balanced!
+
+```{r,eval=F, include=F}
+const_yhat_success
+```
+
+
+#### Set up separate training and validation sets
+
+We use a built in feature from the Tidyverse package to create a 70-30 train-test split.
+```{r}
+Heart_split <- initial_split(Heart, prop = 0.7)
+Heart_train <- Heart_split %>% training()
+Heart_valid <- Heart_split %>% testing()
+```
+
+
+**Inspect the training data**
+
+```{r}
+head(Heart_train)
+```
+**Inspect the validation data**
+```{r}
+head(Heart_valid)
+```
+
+
+
+
+#### Create A Dataframe to Store All of Our Model Types and the 'Best' Specifications for Each.
+
+For each model fitting procedure, we create a grid of tuning parameters and model inputs (including a choice of predictors and functional forms where applicable).
+
+We then iteratively fit all of these specifications and calculate the validation/cross-validation set accuracy, choosing the 'Best' model usually as that with the highest accuracy, or the simplest specification with a high enough accuracy.
+
+In our classification setting, this is the misclassification rate.
+
+We then store this specification (all the inputs we need to run this fit) and its accuracy in this aggregated table, repeating this for all model fitting procedures.
+
+In other words, each row corresponds to a model fitting procedure (e.g. GAM, tree, OLS) with each column giving some parameter or information about the specification that achieved the best accuracy given that model procedure.
+
+##### Create a function to make this dataframe
+
+This allows us to create the table above to store any number of tuning parameters and use any form of accuracy measure, in this case, we use the misclassification (misclass) rate,
+and 3 tuning parameters.
+
+In this table, sub-models and functional forms and combinations of predictors are also counted as tuning parameters, just for maintainability, although this is not strictly true.
+
+
+```{r}
+gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
+  df = data.frame(
+    model_type = character(len),
+    model_name = character(len)
+  )
+  for (measure in accuracy_measures) {
+    df[[measure]] <- numeric(len)
+  }
+  #tp stands for tuning parameter
+  df$tp1_name = character(len)
+  df$tp2_name = character(len)
+  df$tp3_name = character(len)
+  df$tp1_value = numeric(len)
+  df$tp2_value = numeric(len)
+  df$tp3_value = numeric(len)
+
+  return(df)
+}
+Heart_models <- gen_models_df(accuracy_measures = c("misclass_rate"))
+```
+```{r, echo=F, eval=F}
+Heart_models
+```
+
+
+#### Functions for Model Tuning
+
+We define a set of functions to select the 'best' tuning parameters for different models, often defined as the simplest model past a threshold level of prediction accuracy.
+
+##### Define a Function that Finds Prediction Accuracy
+
+This takes predictions as inputs and calculates the validation mis-classification rate (or, optionally, MSE) accordingly.
+
+```{r}
+
+calculate_error <- function(predictions, true_values, classify) {
+  if (classify) {
+    return(mean(predictions != (as.numeric(true_values) - 1)))
+  } else {
+    return(mean((predictions - true_values)^2))
+  }
+}
+
+```
+
+
+##### Define a Function that Calculates Validation Set Accuracy for a Grid of Tuning Parameters.
+
+We use Tidymodels syntax for efficiency and modularity with different fitting procedures.
+
+Uses a helper function to get the model specification (including the fitting procedure and the engine) into tidyverse's desired format first.
+
+```{r}
+# Function to get model specification
+get_model_spec <- function(model_fitting_procedure, engine, tuning_params) {
+  if (model_fitting_procedure == "tree") {
+    model_spec_updated <- decision_tree(
+      mode = "classification", 
+      cost_complexity = tuning_params$cp,
+      tree_depth = tuning_params$maxdepth,
+      min_n = tuning_params$min_n
+    ) %>%
+      set_engine(engine)
+    
+  } else if (model_fitting_procedure == "random_forest") {
+    model_spec_updated <- rand_forest(
+      mtry = tuning_params$mtry,
+      trees = tuning_params$trees,
+      mode = "classification"
+    ) %>%
+      set_engine(engine, probability = TRUE)
+    
+  } else if (model_fitting_procedure == "boosting") {
+    model_spec_updated <- boost_tree(mode = "classification") %>%
+      set_engine(engine)
+    
+  } else if (model_fitting_procedure == "logit") {
+    model_spec_updated <- logistic_reg(mode = "classification") %>%
+      set_engine(engine, family = "binomial")
+    
+  } else {
+    stop("Invalid model fitting procedure. Choose from 'tree', 'random_forest', 'boosting', or 'logit'.")
+  }
+  
+  return(model_spec_updated)
+}
+
+
+```
+
+```{r}
+# Function to get the accuracy for each model specification corresponding to the tuning parameters
+
+
+grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fitting_procedure, engine) {
+  # Initialize empty data frames to store results and predictions
+  accuracy_df <- tuning_grid
+  all_preds_df <- data.frame()
+  model_fits <- list()  # Initialize the list to store model fits
+  
+  # Iterate over each combination of hyperparameters in the tuning grid
+  for(i in 1:nrow(tuning_grid)) {
+    # Extract current tuning parameters
+    tuning_params <- tuning_grid[i, ]
+    
+    # Get the model specification dynamically
+    model_spec_updated <- get_model_spec(model_fitting_procedure, engine, tuning_params)
+    
+    # Create a workflow
+    current_wf <- workflow() %>%
+      add_model(model_spec_updated) %>%
+      add_formula(as.formula(tuning_params$formula))
+    
+    # Fit the model on the training data
+    model_fit <- fit(current_wf, data = train_data)
+    
+    # Store the model fit in the list
+    model_fits[[i]] <- model_fit  # Index the model fit by i
+    
+    # Predict probabilities on the validation set
+    prob_predictions <- predict(model_fit, valid_data, type = "prob")$.pred_1
+    
+    # Apply threshold to classify predictions
+    predictions <- as.factor(as.numeric(prob_predictions > tuning_params$thresh))
+    
+    # Calculate misclassification rate
+    predictions <- factor(predictions, levels = levels(valid_data$y)) # I had to force level matching because when fbs is used as a single predictor, it throws a level mismatch error, making stepwise selection a problem
+    error <- mean(predictions != valid_data$y)
+    
+    # Store results
+    accuracy_df$misclass_rate[i] = error
+    
+    # Put the accuracy results first and the formula last
+    accuracy_df <- accuracy_df %>%
+      select(misclass_rate, everything(), -formula, formula)
+    
+    # Store predictions
+    preds_df <- data.frame(preds = predictions, prob_preds = prob_predictions) %>%
+      bind_cols(valid_data %>% select(y)) %>%
+      mutate(spec_no = i)
+    
+    all_preds_df <- rbind(all_preds_df, preds_df)
+  }
+  
+  # Return both results and predictions, including the list of model fits
+  return(list(
+    accuracy_df = accuracy_df,
+    preds = all_preds_df,
+    model_fits = model_fits  # Add the list of model fits to the output
+  ))
+}
+
+
+
+
+```
+
+
+
+
+
+
+#### Create a function that conducts one forward or one backward stepwise iteration
+
+
+##### First Need a Function that Extracts the Predictors from a Formula Column in a Tuning Grid
+```{r}
+
+extract_predictors <- function(formula) {
+  # Remove "y ~" from the formula
+  formula_rhs <- gsub("y ~", "", formula)
+  
+  # Trim spaces
+  formula_rhs <- trimws(formula_rhs)
+  
+  # Split into vector if not empty, otherwise return empty vector
+  if (formula_rhs == "" || formula_rhs == "y ~") {
+    return(character(0))  # Return empty vector if no predictors in the formula
+  } else {
+    return(unlist(strsplit(formula_rhs, " \\+ ")))  # Split by " + "
+  }
+}
+
+          
+```
+
+
+##### Write the function itself
+
+```{r}
+
+fwd_bckwd_step <- function(train_data, valid_data, tuning_params, model_fitting_procedure, engine, direction = "fwd") {
+  
+  # Get all predictor names except the target variable "y"
+  predictors <- setdiff(names(train_data), "y")
+  
+  # Split current_predictors string into individual variable names, if any
+  current_predictors <- extract_predictors(tuning_params$formula)  # Fixed here, using extract_predictors function directly
+  # Find remaining predictors not in the current predictor set
+  predictors_left <- setdiff(predictors, current_predictors)
+  
+  # Track the number of predictors currently in the model
+  n <- length(current_predictors) # Current number of predictors in the model
+  
+  # Generate formulas based on direction
+  if (direction == "fwd") {
+    # Forward step: Generate new formulas by adding one predictor at a time
+    predictor_combos <- expand.grid(current = paste(current_predictors, collapse = " + "), new = predictors_left, stringsAsFactors = FALSE)
+    if (length(current_predictors) == 0) {
+      predictor_combos$formula <- paste("y ~", predictor_combos$new)
+    }
+    else {
+      predictor_combos$formula <- paste("y ~", predictor_combos$current, "+", predictor_combos$new)
+    }
+    
+  } else if (direction == "bkwd") {
+    # Backward step: Generate new formulas by removing one predictor at a time
+    predictor_combos <- expand.grid(current = paste(current_predictors, collapse = " + "), remove = current_predictors, stringsAsFactors = FALSE)
+    predictor_combos$formula <- apply(predictor_combos, 1, function(row) {
+      remaining_vars <- setdiff(current_predictors, row["remove"])
+      paste("y ~", paste(remaining_vars, collapse = " + "))
+    })
+  }
+  # Expand tuning_params to match the number of new formulas
+  tuning_params <- tuning_params %>% select(-formula)
+  tuning_rows <- nrow(tuning_params)
+  predictor_rows <- nrow(predictor_combos)
+  fwd_tuning_grid <- tuning_params %>% slice(rep(1:tuning_rows, each = predictor_rows))
+
+
+  # Assign new formulas to the expanded tuning grid
+  fwd_tuning_grid$formula <- as.character(predictor_combos$formula)
+
+  # Calculate the accuracy for each specification in the grid
+  valid_output <- grid_validate_tidy(train_data, valid_data, fwd_tuning_grid, model_fitting_procedure, engine)
+  accuracy_df <- valid_output$accuracy_df
+  preds <- valid_output$preds
+  
+  # Extract the best model (the one with the lowest misclassification rate)
+  best_index <- which.min(accuracy_df$misclass_rate)
+
+  best_model <- accuracy_df[best_index,]
+  best_model <- best_model[1,]
+  
+  # Add a column that says that the predictions belong to the best model
+  preds <- preds %>% mutate(best = ifelse(spec_no == best_index, 1, 0))
+  
+  # Get the final new formula with the new predictors from the best model
+  new_formula <- best_model$formula  # Using extract_predictors to split the formula
+  
+  # Output the best model and the new set of predictors
+  return(list(accuracy_df = accuracy_df, preds=preds, best_model = best_model, new_formula = new_formula, n = n))
+  
+}
+
+
+
+```
+
+
+
+
+
+
+#### Create a function that conducts mixed stepwise subset selection
+
+This will be based on a rule of conducting b steps backward after every a steps forward, until we get to using the maximum amount of predictors.
+
+This then produces a grid of the best model for each semi iteration, and then in turn selects the best n predictor model out of those.
+
+
+
+```{r}
+stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitting_procedure, engine, predictors_lim = 4, fwd_steps = 3, bkwd_steps = 2) {
+  # Get all predictor names except the target variable "y"
+  predictors <- setdiff(names(train_data), "y")
+  
+  # Get the top number of predictors we can use
+  n_predictors <- predictors_lim
+  
+  # Initialize counters for forward and backward steps
+  total_fwd = 0
+  total_bkwd = 0
+  n = 0  # start with 0 predictors in the model
+  all_preds_df <- data.frame() # initialise an empty dataframe to store the predictions from each spec
+  accuracy_df <- data.frame()  # Initialise an empty dataframe for the accuracy results
+  
+  # Perform major iterations (each major iteration consists of fwd_steps forward and bkwd_steps backward)
+  while (n < n_predictors) {
+    # Forward steps (for each major iteration, take fwd_steps forward)
+    for (i in 1:fwd_steps) {
+      if (n + 1 <= n_predictors) {
+        total_fwd = total_fwd + 1
+        n = n + 1
+        
+        # Perform a forward selection step using fwd_bckwd_step
+        fwd_step_output <- fwd_bckwd_step(train_data, valid_data, tuning_params, model_fitting_procedure, engine, direction = "fwd")
+        
+        # Store the best model for this forward step
+        best_model <- fwd_step_output$best_model
+        
+        # Update selected_predictors to the new predictors from the best model
+        tuning_params$formula <- as.character(fwd_step_output$new_formula)
+        
+        # Append a new row to accuracy_df with misclass_rate, total_fwd, etc., and tuning_params
+        new_row <- cbind(
+          total_steps = total_fwd + total_bkwd,
+          total_fwd = total_fwd,
+          total_bkwd = total_bkwd,
+          n = n,
+          misclass_rate = best_model$misclass_rate,
+          tuning_params
+        )
+        accuracy_df <- rbind(accuracy_df, new_row)
+        preds_df <- fwd_step_output$preds %>%
+        mutate(total_steps = total_fwd + total_bkwd)
+    
+        all_preds_df <- rbind(all_preds_df, preds_df)
+      }
+    }
+    
+    # Backward steps (after forward steps, perform bkwd_steps backward)
+    # Only start if can make at least the min number of backward steps
+    if ( n >= bkwd_steps+1) {
+      for (i in 1:bkwd_steps) {
+        if (n -1 >= 1) {
+          total_bkwd = total_bkwd + 1
+          n = n - 1
+          
+          # Perform a backward selection step using fwd_bckwd_step
+          bkwd_step_output <- fwd_bckwd_step(train_data, valid_data, tuning_params, model_fitting_procedure, engine, direction = "bkwd")
+          
+          # Store the best model for this backward step
+          best_model <- bkwd_step_output$best_model
+          
+          # Update selected_predictors to the new predictors from the best model
+          tuning_params$formula <- as.character(bkwd_step_output$new_formula)
+          
+          # Append a new row to accuracy_df with misclass_rate, total_bkwd, etc., and tuning_params
+          new_row <- cbind(
+            total_steps = total_fwd + total_bkwd,
+            total_fwd = total_fwd,
+            total_bkwd = total_bkwd,
+            n = n,
+            misclass_rate = best_model$misclass_rate,
+            tuning_params
+          )
+          accuracy_df <- rbind(accuracy_df, new_row)
+          preds_df <- bkwd_step_output$preds %>%
+          mutate(total_steps = total_fwd + total_bkwd)
+          all_preds_df <- rbind(all_preds_df, preds_df)
+        }
+      }
+    }
+    
+    # If we can still take more forward steps and backward steps, continue another major iteration
+    if (n + fwd_steps > n_predictors) {
+      break  # Stop if adding fwd_steps would exceed the total number of predictors
+    }
+  }
+  
+  # Reorder columns to ensure misclass_rate and formula are first
+  accuracy_df <- accuracy_df[, c("misclass_rate", "formula", setdiff(names(accuracy_df), c("misclass_rate", "formula")))]
+  
+  # Return the accuracy_df containing misclassification rates and tuning params for each step
+  return(list(accuracy_df = accuracy_df, preds = all_preds_df))
+}
+```
+
+##### Set Up Base Formulas to Plug into Tuning Grids
+
+```{r}
+predictors <- names(Heart)[-1]
+# Set up a set of formulae (subsets of predictors) that we can use
+selected_predictors = c(paste(as.character(predictors[1]), collapse = " + "),
+                                           paste(as.character(predictors[1:4]), collapse = " + "),
+                                           paste(as.character(predictors[1:8]), collapse = " + "),
+                                           paste(as.character(predictors[1:12]), collapse = " + "))
+formulas <- paste("y ~", selected_predictors)
+
+```
+
+
+
+#### Create a Function That Can Plot How Our Validation or Cross-Validation Error Measures Compare Based on Combinations of Tuning Parameters.
+
+This takes a specification grid output from grid_validate_tidy() above as an input, plotting how validation accuracy/error changes based on up to 3 dimensions.
+
+First dimension is the x axis, second dimension is the colour, third is the shape.
+
+These are both included in the legend.
+
+The first point to have the minimum 'val_measure' or error measure (in this case, misclassification rate) is surrounded by a red square, but this isn't always the model we choose.
+
+Often, our misclassification rate will be 0, as we only have so many observations and our predictions, like the true values, are binary, so either match exactly or not at all. If all predictions match exactly with the true values from the validation set, our prediction accuracy is maximised.
+
+```{r}
+plot_grid <- function(grid, val_measure = "v_mse", tp1 = "n_preds_used", tp2 = NA, tp3 = NA, logx = FALSE) {
+  best_model <- grid[which.min(grid[[val_measure]]), ]
+  
+  plot <- grid |>
+    ggplot(aes(x = .data[[tp1]])) +
+    geom_point(aes(
+      y = .data[[val_measure]], 
+      color = if (!is.na(tp2)) as.factor(.data[[tp2]]) else NULL, 
+      shape = if (!is.na(tp3)) as.factor(.data[[tp3]]) else NULL
+    ), size = 2, alpha = 0.5) +
+    geom_point(data = best_model, aes(x = .data[[tp1]], y = .data[[val_measure]]), 
+               color = "red", shape = 0, size = 4, stroke = 1.2) +
+    labs(
+      title = paste(val_measure, "vs.", tp1),
+      x = tp1,
+      y = val_measure
+    ) +
+    expand_limits(y = 0.9 * min(grid[[val_measure]])) +
+    theme_minimal() +
+    theme(
+      legend.position = "bottom",
+      legend.box = "horizontal",
+      legend.margin = ggplot2::margin(t = 5, b = 5, unit = "pt"),
+      legend.key.height = unit(0.5, "cm"),
+      legend.spacing.x = unit(0.6, "cm")
+    ) +
+    guides(
+      color = guide_legend(order = 1, ncol = if (!is.na(tp2) && !is.na(tp3)) 2 else 1),
+      shape = guide_legend(order = 2, ncol = if (!is.na(tp2) && !is.na(tp3)) 2 else 1)
+    )
+  
+  if (!is.na(tp2)) {
+    plot <- plot + scale_color_discrete(name = tp2)
+  }
+  if (!is.na(tp3)) {
+    plot <- plot + scale_shape_discrete(name = tp3)
+  }
+  if (logx) {
+    plot <- plot + scale_x_log10(breaks = scales::trans_breaks("log10", function(x) 10^x))
+  } 
+  print(plot)
+}
+
+```
+
+
+#### Create a function that retrieves the best specification 
+
+In other words, this retreives the corresponding sub-model, regressors, functional forms and tuning parameters that give us the best validation set accuracy from a grid (like that output from grid_validate()) where each row is some different specification.
+
+```{r}
+get_best_spec <- function(grid_df, grid_validation) {
+  e_column <- grep("misclass|mse", colnames(tree_df), value = TRUE)
+  best_idx <- which.min(grid_df[[e_column]])
+  best_e <- grid_df[best_idx, e_column]
+  best_row <- grid_df[best_idx,]
+  best_preds <- grid_validation$preds[[best_idx]]
+  best_valids <- grid_validation$valids[[best_idx]]
+  best_fits <- grid_validation$fits[[best_idx]]
+  return(list(preds=best_preds, valids=best_valids, fits = best_fits, error = best_e, row =best_row))
+}
+
+
+```
+
+#### Create a function that visually compares predicted values to validation values
+
+This is set up to work both for continuous outcomes (preds against valids scatter plot) and a categorical outcome (confusion matrix)
+
+```{r}
+graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
+  predictions_df <- data.frame(y = valids, yhat=preds)
+  if (cm) {
+    confusion_matrix <-
+    predictions_df |> 
+    conf_mat(truth = y, estimate = yhat)
+    print(confusion_matrix |> autoplot(type = "heatmap"))
+  }
+  if (scatter == T) {
+    if (classify) {
+      predictions_df$yhat <- as.numeric(predictions_df$yhat) - 1
+      predictions_df$y <- as.numeric(predictions_df$y) - 1
+    }
+    print(plot(predictions_df$yhat, predictions_df$y))
+    abline(0, 1)
+  }
+  error_col <- paste0(ifelse(classify, "misclass_rate", "mse"))
+  print(paste(error_col, ":", calculate_error(preds, valids, classify)))
+}
+
+
+
+```
+
+
+
+
+### Baseline Model: Logistic (Few Predictors)
+
+We implemented this basic model for easy interpretability and comparison.
+```{r, echo = F, eval = F}
+#chol+trestbps+fb
+fit1 <- glm(y~ exang + chol, data=Heart_train, family = binomial)
+summary(fit1)
+```
+
+
+#### Use the Validation Set Approach to find The Best Two Variable Logit Model:
+
+##### Set up A Tuning Grid
+```{r}
+tuning_grid_logit <- expand.grid(
+  thresh = c(0.3,0.4,0.5),
+  formula = as.character("y ~ .")
+)
+tuning_grid_logit$formula = as.character(tuning_grid_logit$formula)
+tuning_grid_step_logit <- tuning_grid_logit
+tuning_grid_step_logit$formula = as.character("")
+tuning_grid_step_logit
+
+```
+
+##### Get the Accuracy of Each Specification
+```{r}
+stepwise_selection_logit_output <- stepwise_selection(Heart_train, Heart_valid, tuning_grid_step_logit[1,], "logit", "glm", predictors_lim = 5)
+```
+
+**Look at the Grid**
+
+```{r}
+
+stepwise_selection_logit_df <- stepwise_selection_logit_output$accuracy_df %>% filter(n<=5)
+stepwise_selection_logit_df
+
+```
+
+
+**Look at the Plot**
+
+```{r}
+plot_grid(stepwise_selection_logit_df, val_measure = "misclass_rate", tp1 = "total_steps", tp2="formula", tp3="n")
+```
+
+Here, we see that the best n = 2 variable model uses predictors oldpeak and cp for a misclassification rate of 22.5%. This corresponds to the traingle (n=2 models) that is light blue, or the 4th step.
+
+#### Analyse Results of Best 2 Variable Model
+
+**Extract the Chosen Specification**
+```{r}
+# Check the predictions of the model with the best trade-off:
+best_spec_idx <- 10 # since this is still relatively interpretable.
+glm_fit_predictions <- stepwise_selection_logit_output$preds %>% filter(total_steps == best_spec_idx, best==1)
+glm_fit <- stepwise_selection_logit_output$model_fits[[best_spec_idx]]
+#tree_output$accuracy_df[ best_spec_idx, ]
+
+```
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- stepwise_selection_logit_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(glm_fit_predictions$preds, glm_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+glm_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+It makes sense that our model used a lower cutoff probability (0.3) to assign positive values, since to achieve a higher true postive rate (sensitivity) above 0.75, we need to trade-off a larger false postive rate (1-specificity), one that is at least (just below) 25%.
+
+
+### Gradient-Descent-Based Model: Logistic (Few Predictors)
+Take a decreasing size step, and use a loss function without a constant
+Explain why we used this
+#### Explain how this works (Stickiest Part of Project)
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+### Relatively Interpretable Model: Depth 4 Classification Tree
+
+We choose a short classification tree as a relatively interpretable model, given that it can be read and understood in an intuitive way without necessarily having specific domain knowledge.
+
+This is because instead of using a complicated functional form for how the outcome depends on its predictors, when a tree is fit to data, at each level of depth it creates a single split into different groupings, or 'nodes'. For example, all those patients with cp above 0.5 may assigned to one grouping and those below to another group. This means each grouping will have different characteristics (which are used to predict probabilities). In turn, at each consequent level of depth, these groupings are split further and further based on being either side of a threshold for a chosen predictor. 
+
+Each of these splits is created in such a way to maximise node purity. This is done by assigning the predicted probability of the positive class conditional on being in that node (and having predictor values that put a patient in that grouping) as the proportion of training observations in the positive class. 
+
+It then seeks to achieve maximum node purity by minimising the Gini Index, which takes its smallest values (closest to 0) if either all the predicted probabilities are close to 1, or all of them are close to 0 (James, Witten, Hastie, & Tibshirani, 2023). Intuitively, it can be seen that when a grouping is more 'pure' (i.e., the observations tend to have more similar outcomes), then it makes more sense for a tree to define a split that creates such a grouping, and consequently associate the characteristics that put a patient into that group as characteristics associated with the probability of the positive class in that group.
+
+This ultimately creates discrete, mutually exclusive and collectively exhaustive final groupings/nodes, each of which have certain characteristics.
+
+This recursive splitting process directly maps to flow diagram process for iteratively distinguishing and grouping patients. Therefore, it can be crucially informative for diagnosis.
+
+A medical professional can proceed by gathering key data on a patient, and iteratively going through a checklist.
+
+At the first bullet or 'depth' level of the checklist, a piece of information on the patient is used to put them into a sub group, depending on whether they exceed or fall short of a given threshold on that data point.
+
+At each subsequent 'depth' level in the checklist, another piece of information on the patient (perhaps one already used before) is used to put them into a sub group of the group they were just in. Eventually, the patient is placed in one of the final groupings. 
+
+Based on this grouping, and the charactestics associated with being in that grouping, the medical professional can predict the chance (conditional on those characteristics) that that patient will have heart disease. If this probability is sufficiently high, a positive diagnosis can be given.
+
+In the case of heart disease diagnosis, we might not simply want the highest accuracy, but perhaps particularly avoid false negatives (and maximise true positives, even at the cost of false positives). This depends, of course, on the treatments prescribed to the patient.
+
+**Treatments often fall into one of the below groupings:**
+[Sourced from (British Heart Foundation, 2025) (NHS, 2025) (Mayo Clinic, 2025)]
+
+1. **Lifestyle Changes**
+ - Exercise (Strengthen your heart muscles and widen blood vessels)
+ - Healthy Eating (Target the root cause)
+ - Ceasing to smoke (Improve your body's functioning)
+ 
+2. **Medicines**
+ - Blood Thinners (To prevent blood clotting and blocking blood vessels)
+ - Statins (To lower cholesterol)
+ - Beta Blockers (To slow Heartbeat and improve blood flow using hormones)
+ - Nitrates (To widen Blood Vessels)
+ - ACE Inhibitors or ARBs (Reduce a hormone that would cause blood vessels to narrow)
+ - Calcium Chanel Blockers (Relax Muscles on the walls of arteries, making them wider)
+ 
+3. **Surgical Procedures**
+[Usually only implemented with a check on a coronary angiogram]
+ - Coronary Angioplasty (Small balloon inflated to push fatty tissue of a narrowed blood vessel outwards, improving blood flow)
+ - Bypass Surgery (CABG) (A new blood vessel is inserted to bypass a blocked section of an existing vessel)
+ - Heart Transplant (Replace the patient's disfunctional heart with one that works better)
+ 
+ 
+
+On the one hand, false positives may cause undue stress, when someone is misleadingly worried about heart disease that they may not have.
+
+If prescribed treatment is benign, such as in the case of lifestyle changes, it will make sense to be less cautious about coming to a positive diagnosis, because taking on this prescription will at best come at large personal benefits and at worst incur marginal costs relative to those benefits. Eating less sugar and saturated fat leads to a slight quality of life reduction in the short term, but a healthier lifestyle has substantial benefits and often improves quality of life in the long term and that derived from profound and not superficial pleasures, even if a patient does not yet have nor is at risk of heart disease. 
+
+This applies also to more mild medicine prescriptions, with side-effects extending from negligible symptoms to some only as severe as dizziness, headaches and fatigue (ibid).
+
+However, to the extent that treatments are more severe in their nature, such as stronger medicines or surgical procedures, we may wish to use a higher threshold to avoid the consequences of prescribing treatment to someone who was not at risk. Moving forward, due to the fact that variables in our data has not been previously used to prescribe surgical treatment, and the binary nature of our outcome variable has no indication of the severity of heart disease, which would be essential in this application, we will only consider the applications for diagnosis that results in lifestyle change and medicine prescriptions.
+
+On the other hand, it is likely worth trading off more false negatives in exchange for more true positives so that a greater amount of corrective treatment can be prescribed, and so that we can prevent the conditions of more patients getting worse (even if they have yet to truly have coronary heart disease).
+
+Likewise, any non-professional (perhaps a patient themselves, or a trainee) could also use such a flow chart structure to identify the chance of a positive diagnosis/ what factors tend to be most associated with high risk of heart disease, making it more practical to diagnose on a larger scale.
+
+ 
+#### Start With Splits on All Possible Predictors
+
+This first tree flow chart can be used either for informative purposes as to what may tentatively be leading factors behind heart disease, or diagnosis situations in which all the measures in the training data are accessible to the professional giving the diagnosis.
+
+In this case, we use the rpart engine as opposed to the tree engine.
+
+#### Validate the Best Depth
+
+We look for a depth level that has high levels of prediction accuracy yet not 
+
+##### Set up A Tuning Grid
+```{r}
+tuning_grid_tree <- expand.grid(
+  cp = c(0.001),
+  #seq(0.001, 0.0001, length.out = 10),   # Cost complexity pruning (alpha parameter that imposes penalty on tree depth)
+  maxdepth = c(1,3,4,5,6,8,10,15,20),  # Limit tree depth
+  min_n = c(5),  # Number of obs per split, so if higher, reduces splits
+  thresh = c(0.3,0.4, 0.5),  
+  formula = as.character("y ~.")
+)
+
+tuning_grid_tree$formula <- as.character(tuning_grid_tree$formula)
+```
+
+**Look at the Grid**
+```{r}
+tree_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid_tree, "tree", "rpart")
+
+# View the accuracy results
+tree_output$accuracy_df
+```
+
+**Look at the Plot**
+```{r}
+plot_grid(tree_output$accuracy_df, val_measure = "misclass_rate", tp1 = "maxdepth", tp2 = "thresh")
+```
+
+It is observable that already once we reach depth 4, validation set accuracy is relatively high, with only an approximate and acceptable 15% misclassification rate. Nonetheless, the short depth retains interpretability.
+
+
+
+
+#### Analyse Results
+
+**Extract the Chosen Specification**
+```{r}
+# Check the predictions of the model with the best trade-off:
+best_spec_idx <- 3 # since this is still relatively interpretable.
+tree_fit_predictions <- tree_output$preds %>%
+  filter(spec_no == best_spec_idx)
+tree_fit <- tree_output$model_fits[[best_spec_idx]]
+#tree_output$accuracy_df[ best_spec_idx, ]
+```
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- tree_output$accuracy_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+tree_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+Note that the classification tree only requires that our false positive rate exceeds aprrox. 15% if we should wish to have higher than 75% classification accuracy, lower than the logit. This means that the predictive accuracy (at least within distribution) of a tree model is such that we face a **more favourable tradeoff** with diagnosing patients.
+
+#### Use Best Tree Model To Learn About Data
+
+##### Look at the splits it is conducting and on what variables:
+
+
+**Using the rpart engine**
+
+```{r}
+# Define the best model specification
+best_model_spec <- decision_tree(
+  mode = "classification", 
+  cost_complexity = best_params$cp,  # Cost-complexity pruning
+  tree_depth = best_params$maxdepth,  # Max depth of tree
+  min_n = best_params$min_n  # Minimum number of observations per node
+) %>%
+  set_engine("rpart")
+
+# Create workflow
+best_workflow <- workflow() %>%
+  add_model(best_model_spec) %>%
+  add_formula(as.formula(best_params$formula))
+
+# Fit the model to full training data
+best_tree_fit <- fit(best_workflow, data = Heart_train)
+
+# Extract the fitted model
+best_rpart_model <- extract_fit_engine(best_tree_fit)  # Gets the rpart model
+
+# Plot the tree
+rpart.plot(best_rpart_model, roundint = FALSE) 
+# the roundint = false is used to avoid a warning that rpart Cannot retrieve the original training data used to build the model (so cannot determine roundint and is.binary for the variables)
+
+```
+
+#### How Would this Change With Access to Limited Predictors?
+
+```{r}
+# We now only select a SUBSET of Heart_train which includes only the most measurable data
+Heart_subset <- Heart_train %>% select(y, sex, age, chol, trestbps)
+
+```
+
+
+#### Validate the Best Depth
+
+We look for a depth level that has high levels of prediction accuracy yet not 
+
+##### Set up A Tuning Grid
+```{r}
+tuning_grid_tree <- expand.grid(
+  cp = c(0.001),
+  #seq(0.001, 0.0001, length.out = 10),   # Cost complexity pruning (alpha parameter that imposes penalty on tree depth)
+  maxdepth = c(1,3,4,5,6,8,10,15,20),  # Limit tree depth
+  min_n = c(5),  # Number of obs per split, so if higher, reduces splits
+  thresh = c(0.3,0.4, 0.5),  
+  formula = as.character("y ~.")
+)
+
+tuning_grid_tree$formula <- as.character(tuning_grid_tree$formula)
+```
+
+**Look at the Grid**
+```{r}
+
+tree_output <- grid_validate_tidy(Heart_subset, Heart_valid, tuning_grid_tree, "tree", "rpart")
+
+# View the accuracy results
+tree_output$accuracy_df
+```
+
+**Look at the Plot**
+```{r}
+plot_grid(tree_output$accuracy_df, val_measure = "misclass_rate", tp1 = "maxdepth", tp2 = "thresh")
+```
+
+It is observable that now, validation set accuracy is only lower at higher depths. A depth of 3 or to 6 makes little additional difference, but this accuracy is too low.
+
+Instead, a depth 8 tree works quite well. Although this is an 8 point checklist, it is still not that many points and requires fewer readings to be taken.
+
+
+
+
+#### Analyse Results
+
+**Extract the Best Depth 4 Specification**
+```{r}
+# Check the predictions of the model with the best trade-off:
+best_spec_idx <- 21 # since this is still relatively interpretable.
+tree_fit_predictions <- tree_output$preds %>%
+  filter(spec_no == best_spec_idx)
+tree_fit <- tree_output$model_fits[[best_spec_idx]]
+#tree_output$accuracy_df[ best_spec_idx, ]
+```
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- tree_output$accuracy_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+tree_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+
+Because we have access only to limited measurements, to achieve higher than 75% accuracy, we would need to trade-off more than 25% in false postive diagnoses, which is worse even than the logit model.
+
+However, this is if we are limiting ourselves to a depth 4 (or 4-step) diagnosis process. If we increased this to 8, which is still retalively managable, we find the following.
+
+**Extract the Best Depth 8 Specification**
+```{r}
+# Check the predictions of the model with the best trade-off:
+best_spec_idx <- 6 # since this is still relatively interpretable.
+tree_fit_predictions <- tree_output$preds %>%
+  filter(spec_no == best_spec_idx)
+tree_fit <- tree_output$model_fits[[best_spec_idx]]
+#tree_output$accuracy_df[ best_spec_idx, ]
+```
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- tree_output$accuracy_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+tree_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+
+Here, we can see that if, in the first stage [the checklist], we are willing to sacrifice a little extra time for medical professionals to go through a slightly lengthier process (8 steps to diagnosis and not 4 steps to diagnosis), then, in the second stage [the judgement/diagnosis], we **don't need** to sacrifice as many false positive diagnoses to achieve higher accuracies. Specifically, we only need to falsely diagnose approximately 6% of patients if we wish to diagnose 75% or more patients accurately.
+
+
+
+
+
+
+
+### High-Dimensional Model: Regularised Logistic (Few Predictors)
+
+#### Validate/Cross-Validate Best Tuning Parameters
+Run some code
+#### Analyse Results
+Look at results from best Model
+
+
+
+### Predictively Accurate Model: Classification Random Forest
+
+Earlier, we evaluated how a single tree model could result in a more-desirable trade-off of more false positive diagnoses in return for more true postive diagnoses compared to a logit, but **only** if either we had access to measurements that are less practical to gather from a patient, **or** we were willing to extend the depth and complexity of the tree, and hence, the time it would take for a medical professional to carry out a step-based 'checklist' diagnostic process.
+
+However, in many environments today (including even in emerging economies or in the field), medical professionals have access to computer hardware and software that may be sufficient to run predictive models on new patient data to predict conditional probabilities for patients. This eliminates the need for a step-based 'checklist' process, and allows diagnoses to be made systematically fora large number of patients in one go.
+
+Of course, medical professionals still have to gather the data from patients, which means that we should still give priority to models that support the practicality of this part of the process. In other words, we will place priority on model specifications which use:
+
+- Fewer measures (that thus take less time to collect)
+- Measures that are more practical to collect on the spot.
+
+It therefore makes sense to consider models that may be more complex and less interpretable, but offer benefits to predictive accuracy (with a desireable trade-off) and practicality that make them more applicable for diagnosis (although perhaps not as interpretable for prescribing treatment).
+
+For this, we choose to use a **random forest** model, which has a few predictive advantages:
+
+- **Low bias**, because it uses the predictions of numerous trees that are grown deep and so can fit the complex patterns in the data more closely.
+
+- **Low variance**, because it averages out the predictions of a large number of trees, each fitted on a bootstrapped (i.e., sampled with replacement) subsample of the training dataset.
+
+- **Low variance**, because (unlike **bagging**, a special case of **random forests**) it allows splits only on a certain subset of predictors, meaning that each tree is less correlated with the next, and so is less likely to amplify overfitting to our data.
+
+These combine to create a model that has **high predictive accuracy** on **new** data, and, ideally, not just on new data from our our same wider dataset (i.e., can be used to generalise in the distribution), but also from new datasets (which may be out of distribution, to the extent that the underlying relationships have changed). 
+
+In other words, such a fitting procedure should capture as accurately the **fundamental** or **structural** relationships between the variables that do not change throughout time, as opposed to the **transitory** or **reduced form** relationships.This means that the **low bias** feature of our flexible model fitting procedure is particularly useful for this out of distribution generalisation.
+
+Using a validation set approach, we can only guarantee the former, that we can generalise well within distribution. We aim to avoid too much 'optimism' (encouraging our empirical risk to consistently underestimate the true risk), by avoiding the use of excessive degrees of freedom, yet also using sufficient predictors to reduce the irreducible error (we want it to be the case that a true function *of these predictors* is as good at predicting heart disease as possible).
+
+We do this by choosing the tuning parameters and model specification to maximise validation (and not training) set accuracy. In other words, we attempt to ensure we capture the underlying relationships *in our wider data* as much as possible without just falsely misinterpreting the random noise or intricacies of the training subset *of our data* as signals of the underlying relationship. 
+
+As for the latter, we argue that the fact that the human body works much in the same way today than it did many decades ago (NHS, 2025) (National Institutes of Health, 2025) means that much of the relationships we capture hold true throughout time. Although the distribution and data generating process today has some differences to the time when the data was gathered, it is still similar to the distribution of our dataset, given that the structural biological relationships still hold.
+
+However, the distribution and data generating process for a population in a different geographical area with therefore a different corresponding hereditary background is more likely to be fundamentally different to the narrow population in our dataset at any given point in time, because hereditary (gene-related) characteristics will are more likely to affect the relationships and more significantly and systematically so (British Heart Foundation, 2025). To the extent that these differences have a minor aggregate effect, the distributions of our data and this outside sample are still similar.
+
+In particular, we argue that between our Cleveland sample and the wider US, we may introduce more variation in hereditary factors that slightly alter the idiosyncratic relationships, and thus increase irreducible error (our model does not account for these factors, so will simply mis-estimate a little more). However, these will not be *systematically* different to those in our Cleveland sample, so will mean that our estimate of the data generating process is not *systematically wrong* or biased. 
+
+
+
+
+
+
+#### Validate Best Tuning Parameters
+
+##### Set up a Grid of Tuning Parameters
+
+```{r}
+tuning_grid_rf <- expand.grid(
+  mtry = 1:6,
+  trees = c(500),
+  thresh = c(0.4, 0.5),
+  formula = as.character(formulas[3])
+)
+tuning_grid_rf$formula = as.character(tuning_grid_rf$formula)
+tuning_grid_rf
+
+```
+
+##### Compare Accuracy of Different Tuning Parameters
+
+```{r}
+# Run the grid validation function
+rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid_rf, "random_forest", "randomForest")
+```
+
+
+**Look at the Grid**
+```{r}
+
+rf_output$accuracy_df
+```
+
+**Look at the Plot**
+```{r}
+plot_grid(rf_output$accuracy_df, val_measure = "misclass_rate", tp1 = "mtry", tp2 = "thresh")
+```
+#### Analyse Results
+
+```{r}
+# Check the predictions of the model with the lowest misclass rate
+best_spec_idx <-which.min(rf_output$accuracy_df$misclass_rate)
+rf_fit_predictions <- rf_output$preds %>%
+  filter(spec_no == best_spec_idx)
+#check_preds
+```
+
+##### Prediction Accuracy
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(rf_fit_predictions$preds, rf_fit_predictions$y, cm=T, scatter=F)
+```
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r}
+rf_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+Because predicted classes can only be 100% accurate of 0% accurate **for a given observation** (the outcome can take a value of 0 or 1), then even if the continuous predicted conditional probabilities may be slightly different to their true values, it is entirely possible that we classify every observation in a validation set to its true class, especially if we don't have too many observations, and if the data generating process makes patients in the positive class quite distinguishable from those in the negative class.
+
+Thus, the fact that there is no-need to sacrifice false positives for diagnostic accuracy means that this model class provides a highly desirable trade-off that is genuine.
+
+#### Use Best Model To Learn About Data
+
+```{r}
+
+best_spec_row <- rf_output$accuracy_df[best_spec_idx,]
+best_spec_row
+```
+
+
+##### Find Variable Importance
+```{r}
+
+
+rf_fit <- randomForest(y ~ ., data = Heart_train, ntree = best_spec_row$trees, mtry = best_spec_row$mtry, importance = TRUE)
+
+
+varImpPlot(rf_fit)
+```
+Although there are no splits or coefficients to use to interpret the predictive contribution of each variable, we can still use less interpretable, more abstract measures of variable importance.
+
+The above charts show that the 'most important' variables in terms of their contribution towards marginally increasing the strength of fit for the random forest model include *oldpeak* (short term depression induced by exercise relative to rest), *thalach* (maximum heart rate achived), *age*, *chol* (blood cholesterol levels), and *trestbps* (resting bloob pressure). 
+
+This makes intuitive sense, since being unaccustomed to exercise, having high cholesterol and blood pressure, and simply being older are commonly understood to cause heart disease, so measures of these should be good predictors. These plots do not validate the causal effect, but serve to inform about prediction/diagnosis.
+
+The last 3 are practical measures that are easy to collect in a relatively short space of time, motivating the benefits of this model.
+
+
+##### Guage Functional Form of Conditional Probability using PDPs
+```{r}
+pred_rf <- Predictor$new(rf_fit)
+
+pdp_rf <- FeatureEffects$new(pred_rf, features = c("oldpeak","thalach", "age", "chol"), method = "pdp+ice")
+
+plot(pdp_rf) 
+```
+
+Unfortunately, each individual predictor only appears to have a small marginal/partial effect on the probability of having heart disease. Instead, its *conditional* effects may be more important.
+
+
+
+
+
+#### Validate the Best n Variable Random Forest using Mixed Subset Selection
+
+##### Set up a Grid of Tuning Parameters
+
+Formula is empty as we start with 0 predictors.
+
+```{r}
+tuning_grid_rf_step <- expand.grid(
+  mtry = 1:6,
+  trees = c(500),
+  thresh = c(0.5),
+  formula = as.character("")
+)
+tuning_grid_rf_step$formula = as.character(tuning_grid_rf_step$formula)
+tuning_grid_rf_step
+```
+
+```{r}
+
+stepwise_selection_rf_output <- stepwise_selection(Heart_train, Heart_valid, tuning_grid_rf_step[1,], "random_forest", "randomForest", predictors_lim = 4)
+stepwise_rf_df <- stepwise_selection_rf_output$accuracy_df  # Table with steps
+stepwise_rf_df
+
+```
+
+
+
+
+**Look at the Plot**
+
+```{r}
+plot_grid(stepwise_rf_df, val_measure = "misclass_rate", tp1 = "total_steps", tp2="formula", tp3="n")
+```
+
+We find that the second 2 variable variable random forest model (3 forward steps and 2 backward steps and then another forward step) works quite well - chol + thalach being the most accurate.
+
+
+
+#### Analyse Results of Best 2 Variable Model
+
+**Extract the Chosen Specification**
+```{r}
+# Check the predictions of the model with the best trade-off:
+best_spec_idx <- 6 # since this is still relatively interpretable.
+stepwise_rf_fit_predictions <- stepwise_selection_rf_output$preds %>% filter(total_steps == best_spec_idx, best==1)
+stepwise_rf_fit <- stepwise_selection_rf_output$model_fits[[best_spec_idx]]
+#tree_output$accuracy_df[ best_spec_idx, ]
+
+```
+**Observe the tuning parameters of this chosen specification**
+```{r}
+
+best_params <- stepwise_rf_df[best_spec_idx,]
+best_params %>% glimpse()
+
+```
+##### Prediction Accuracy
+
+
+**Look at Confusion Matrix**
+
+```{r}
+graph_preds(stepwise_rf_fit_predictions$preds, stepwise_rf_fit_predictions$y, cm=T, scatter=F)
+```
+
+
+**Look at ROC Curve to guage Cut-Off Trade-Off**
+
+```{r, eval=F}
+stepwise_rf_fit_predictions |>
+  roc_curve( truth = y, prob_preds,
+            event_level = "second") |>
+  autoplot()
+
+```
+
+Unlike with the logit, we don't face nearly as steep a trade-off with false positives. Achieving over 75% accuracy requires only an approximately 3% false positive rate.
+
+Moreover, this model can be used to conduct highly practical diagnoses, since it only requires taking two pieces of data from the patient that can each be accurately collected in a short space of time.
+
+## Conclusion
+
+Did we achieve our objective? Why/Why not?
+
+## Bibliography
+
+Bibliography
+British Heart Foundation. (2025, March). Family History of Heart and Circulatory Diseases (BHF). Retrieved from British Heart Foundation: https://www.google.com/search?q=have+the+same+factors+always+caused+heart+disease&newwindow=1&sca_esv=0472b01422b69ec8&sxsrf=AHTn8zr-98IX2GHtRBseo7vSVFNLi-K4ig%3A1744452819588&ei=0zz6Z5vRI7qDhbIPyoWukAo&ved=0ahUKEwjbho6VodKMAxW6QUEAHcqCC6IQ4dUDCBE&uact=5&
+British Heart Foundation. (2025, April 12). Medicines for Heart Conditions - Treatments. Retrieved from British Heart Foundation: http://bhf.org.uk/informationsupport/treatments/medication#:~:text=Holidays%20and%20travel-,Types%20of%20medicine%20for%20heart%20conditions,SGLT2%20inhibitors.
+James, G., Witten, D., Hastie, T., & Tibshirani, R. (2023). An Introduction to Statistical Learning with Applications in R. 
+Mayo Clinic. (2025, March). Heart disease - Diagnosis and treatment - Mayo Clinic. Retrieved from Mayo Clinic: https://www.mayoclinic.org/diseases-conditions/heart-disease/diagnosis-treatment/drc-20353124
+National Institutes of Health. (2025, March). Bioengineering and the Cardiovascular System - PMC. Retrieved from NIH.org: https://www.google.com/search?q=have+the+biological+fundamentals+of+the+human+body+with+respect+to+heart+disease+changed+in+the+last+50+years&newwindow=1&sca_esv=0472b01422b69ec8&sxsrf=AHTn8zpnxWNSxCZU6jBsjJANayje5PMEag%3A1744457102261&ei=jk36Z8baD62ahbIP
+NHS. (2025, March). Coronary Heart Disease - Causes. Retrieved from NHS: https://www.nhs.uk/conditions/coronary-heart-disease/causes/#:~:text=Coronary%20heart%20disease%20(CHD)%20is,have%20diabetes
+NHS. (2025, April). Coronary heart disease - Treatment. Retrieved from NHS: https://www.mayoclinic.org/diseases-conditions/heart-disease/diagnosis-treatment/drc-20353124
+
+
+
+## Annex
+Only if you get disgusting enough to go really technical. OR, if we tried something first, and it didn't wuite work, we can show that here.

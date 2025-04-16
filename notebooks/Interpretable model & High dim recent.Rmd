@@ -15,6 +15,7 @@ library(tidymodels)
 library(ggdag)
 library(e1071)
 library(recipes)
+library(rstudioapi) # to set the correct working directory
 ```
 
 We begin by loading our dataset, heart.csv, saving it as a dataframe called heart. We then set a seed for random processes, to ensure a level of reproducibility - this ensures that random operations are consistent in nature. 
@@ -31,13 +32,19 @@ The sex variable is then recoded for better interpretability, with "0" recoded t
 
 The dataset is then split into training and testing sets using a 70/30 ratio, which partitions the data such that 70% of the observations are allocated to the training set and the remaining 30% are allocated to the testing set.
 
+
+#### Set the path for the data and predictions
+```{r, echo=FALSE}
+# Change data_path to where I saved the data
+data_path <- paste0(getwd(),"/../data/")
+predictions_path <- paste0(getwd(),"/../predictions/")
+
+```
+
+
 ```{r}
 # Dataset is loaded and saved as heart
-heart <- read.csv("heart.csv")
-head(heart)
-
-# Set seed for reproduciability 
-set.seed(200)
+heart <- read.csv(paste0(data_path, "Heart.csv"))
 
 # Sex recoded for greater interpretability 
 heart <- heart %>%
@@ -49,6 +56,8 @@ heart <- heart %>%
 heart_split <- initial_split(heart, prop = 0.7)
 train_data <- heart_split %>% training()
 test_data <- heart_split %>% testing()
+
+
 ```
 
 Next, we want to identify the most influential quantitative and qualitative predictors.
