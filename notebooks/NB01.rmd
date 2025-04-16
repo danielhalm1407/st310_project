@@ -702,7 +702,14 @@ graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
 
 
 ### Baseline Model: Logistic (Few Predictors)
-Explain why we used this
+
+We implemented this basic model for easy interpretability and comparison.
+```{r, echo = F, eval = F}
+#chol+trestbps+fb
+fit1 <- glm(y~ exang + chol, data=Heart_train, family = binomial)
+summary(fit1)
+```
+
 
 #### Use the Validation Set Approach to find The Best Two Variable Logit Model:
 
