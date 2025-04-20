@@ -1,277 +1,575 @@
 ---
 title: "Gradient Descent Implementation for a Logistic Regression Model"
 output:
-  word_document: default
   pdf_document: default
+  html_document:
+    df_print: paged
 ---
-
-# Gradient Descent Implementation for a Logistic Regression Model
 
 ```{r include=FALSE}
 library(tidyverse)
 library(tidymodels)
 library(pROC)
-```
 
-```{r}
 Heart <- read.csv("../data/Heart.csv")
 ```
 
-We implemented a simple gradient descent algorithm to classify if patients have a presence of coronary artery disease or not given some medical characteristics $\theta = (\theta_{0}, \dots, \theta_{p})$ for $p \in \mathbb{N}$.
-
-Consider a logistic regression model with $p+1$ (including the constant coefficient term) parameters. Let $X = (x_{1}, \dots, x_{n})$ represent input space where each $x_{i}$ is a vector of length $p+1$ denoting $i$-th row of $X$. Similarly, let $y = (y_{1}, \dots, y_{n})$ be a vector of length $n$ such that each $y_{i} \in \{0,1\}$.
-
-We first divide our `Hearts` dataset into training and testing subsets by defining the following method. The `split_data` function neatly returns training and testing subsets (for our model and R's built-in `glm`) given a vector of column names from the dataset to act as predictors in the model. We also can set the proportion of data allocated to the training and testing subsets with a default of 70/30, respectively.
+We first define our predictors of interest in a vector which is used throughout our implementation. We then filter the dataset for the requested predictors and the the binary response `target` before passing this subset into the `tidymodel` method `initial_split`, subdividing the data into 70% `training` and 30% `testing`.
 
 ```{r}
-split_data <- function(predictors, training_proportion = 0.7, data) {
-	response = c("target")
+predictor_names <- c("chol", "thalach", "cp")
 
-	raw_inputs <- data %>%
-		select(all_of(predictors), "target") %>%
-		mutate_at(vars(-response), scale)
+data_subset <- Heart %>% select(all_of(predictor_names), "target")
+Heart_split <- initial_split(data_subset, prop = 0.7)
 
-	n_training = floor(nrow(data) * training_proportion)
-
-	observation_indices <- c(1:nrow(data))
-	sampled_indices <- sample(observation_indices, n_training)
-
-	training_subset <- raw_inputs %>%
-		slice(sampled_indices)
-	testing_subset <- raw_inputs %>%
-		slice(-sampled_indices)
-
-	X_training <- cbind(1, training_subset %>% select(-all_of(response)))
-	y_training <- training_subset %>% select(all_of(response))
-
-	X_testing <- cbind(1, testing_subset %>% select(-all_of(response)))
-	y_testing <- testing_subset %>% select(all_of(response))
-
-	list(
-		X_training = as.matrix(X_training),
-		y_training = y_training$target,
-		X_testing = as.matrix(X_testing),
-		y_testing = y_testing$target,
-		r_training = training_subset,
-		r_testing = testing_subset %>% select(-all_of(response))
-	)
-}
+training <- Heart_split %>% training()
+testing <- Heart_split %>% testing()
 ```
 
-**Note:** We scaled down the inputs (excluding the column of 1s representing the constant coefficient and the `target` response column). We did this because the conditional in our `gradient_descent` method (shown later) kept failing. Upon examination we noticed that applying the logistic function on $X\beta$ would sometimes produce extremely small values that, once passed into the logistic loss function, would practically become $\log(0)$ which was undefined. This `NaN` value would be saved in the `losses` history and then the conditional errored out since the distance was undefined. The medical characteristics acting as our inputs were usually high values like cholesterol which ranges from 126 to 564 mm/dL; these high ranges are far from the response range which likely contributed to the underflow into $\log(0)$.
-
-We seek to find the optimal coefficients $\beta = (\beta_{0}, \dots, \beta_{p})$ that minimizes the negative log-likelihoods. The negative log-likelihoods, also known as the logistic loss, are given by the following equation
+We seek to find the optimal coefficients $\boldsymbol{\beta} = (\beta_{0}, \dots, \beta_{p})^\mathsf{T}$ that minimizes the negative log-likelihoods with some added positive penalty term $\lambda \in \mathbb{R}$. We decided to go for an L2 (ridge) regularization because [EXPLAIN WHY HERE!!!!!!!!] The negative log-likelihoods, also known as the logistic loss, are given by the following equation
 
 $$
-\ell(\beta \; ; \; y  \, \vert \, x) = -\sum_{i=0}^{n} \left [ \, y_{i} \log(p(x_{i})) + (1 - y_{i}) \log(1 - p(x_{i})) \, \right] ,
+\ell(\beta \; ; \; y  \, \vert \, x) = -\sum_{i=0}^{n} \left [ \, y_{i} \log(\sigma(x_{i})) + (1 - y_{i}) \log(1 - \sigma(x_{i})) \, \right] + \lambda \sum_{j=1}^{p} \beta_{j}^{2},
 $$
 
-where $p(\bullet \; ; \; \beta)$ is given by the logistic function
+where $\sigma(\bullet \; ; \; \beta)$ is given by the logistic function (commonly denoted as the sigmoid function)
 
 $$
-p(x_{i}) = \frac{1}{1 + e^{-x_{i}\beta}} .
+\sigma(x_{i}) = \frac{1}{1 + e^{-x_{i}\beta}} .
 $$
 
 We first need to find the gradient of the loss function by computing derivatives
 
 $$
-\frac{\partial}{\partial \beta} \; \ell(\beta \; ; \; y  \, \vert \, x) = -\sum_{i=0}^{n} \left [ \, y_{i} \frac{1}{p(x_{i})} \frac{\partial p(x_{i})}{\partial \beta} - (1 - y_{i}) \frac{1}{1 - p(x_{i})} \frac{\partial (1-p(x_{i}))}{\partial \beta} \, \right] .
+\frac{\partial}{\partial \beta} \; \ell(\beta \; ; \; y  \, \vert \, x) = -\sum_{i=0}^{n} \left [ \, y_{i} \frac{1}{\sigma(x_{i})} \frac{\partial \sigma(x_{i})}{\partial \beta} - (1 - y_{i}) \frac{1}{1 - \sigma(x_{i})} \frac{\partial (1-\sigma(x_{i}))}{\partial \beta} \, \right] + 2\lambda\beta.
 $$
 
 We see that
 
 $$
-\frac{\partial}{\partial \beta} \; p(x_{i} \; ; \; \beta) = \frac{\partial}{\partial \beta} \left ( \frac{1}{1 + e^{-x_{i}\beta}} \right) = \frac{x_{i} e^{-x_{i}\beta}}{(1 + e^{-x_{i}\beta})^{2}} = p(x_{i})(1-p(x_{i}))x_{i},
+\frac{\partial}{\partial \beta} \; \sigma(x_{i} \; ; \; \beta) = \frac{\partial}{\partial \beta} \left ( \frac{1}{1 + e^{-x_{i}\beta}} \right) = \frac{x_{i} e^{-x_{i}\beta}}{(1 + e^{-x_{i}\beta})^{2}} = \sigma(x_{i})(1-\sigma(x_{i}))x_{i},
 $$
 
 and so substituting back into the gradient function simplifies the equation to
 
 $$
 \begin{align}
-\frac{\partial}{\partial \beta} \; \ell(\beta \; ; \; y  \, \vert \, x) &= -\sum_{i=0}^{n} \left [ \, y_{i}(1 - p(x_{i}))x_{i} - (1-y_{i})p(x_{i})x_{i} \, \right]\\
-&=\sum_{i=0}^{n} \left [ \, (p(x_i) - y_{i}) x_{i} \, \right ] .
+\frac{\partial}{\partial \beta} \; \ell(\beta \; ; \; y  \, \vert \, x) &= -\sum_{i=0}^{n} \left [ \, y_{i}(1 - \sigma(x_{i}))x_{i} - (1-y_{i})\sigma(x_{i})x_{i} \, \right] + 2\lambda\beta\\
+&=\sum_{i=0}^{n} \left [ \, (\sigma(x_i) - y_{i}) x_{i} \, \right ] + 2\lambda\beta.
 \end{align}
 $$
 
 (Notice we distributed the negative in front of the summation through and factored out the $x_{i}$ found in both terms). We define these functions in R for later in the implementation.
 
 ```{r}
+# s-shaped sigmoid function
 logistic_func <- function(logits) {
 	1/(1 + exp(-logits))
 }
 
-logistic_loss <- function(betas, X, y) {
+# implemented using L2 ridge regularization (note: the intercept term does not get penalized)
+logistic_loss <- function(betas, X, y, lambda) {
 	y_hats <- logistic_func(X %*% betas)
-	-sum(y * log(y_hats) + (1 - y) * log(1 - y_hats))
+	penalty <- lambda * sum(betas[-1] * betas[-1])
+	
+	-sum(y * log(y_hats) + (1 - y) * log(1 - y_hats)) + penalty
 }
 
-gradients <- function(betas, X, y) {
+gradients <- function(betas, X, y, lambda) {
 	y_hats <- logistic_func(X %*% betas)
-	t(X) %*% (y_hats - y)
+	
+	# separate the logistic and penalty terms to compute gradients easier
+	logistic_gradient <- t(X) %*% (y_hats - y)
+	penalty_gradient <- 2 * lambda * betas[-1]
+	
+	# sum the two components of the gradient while keeping the intercept term non-regularized
+	logistic_gradient + c(0, penalty_gradient)
 }
 ```
 
-We then define the gradient descent algorithm. At the start we set the `initial_betas` (including the constant term) to random values following from the uniform distribution on $[0,1]$. We defined a `betas` matrix to keep track of the history with size $N \times p+1$ where $N$ denotes the set maximum number of iterations. We similarly set a `losses` vector of size $N$ to keep track of its history.
-
-To start off the descent, we manually run the first two iterations of updating the `betas` and recording the `losses`. From there, this function loops through the remaining $N-2$ iterations where it saves the new `betas`. The loop also contains conditional logic where it computes the `loss_delta` (distance between the current and previous loss value) and breaks out of the loop if it detects that this distance is less than or equal to some set `tolerance`. Before breaking out the `betas` matrix and `losses` vector are trimmed down for easier manipulation later.
+Something else goes here.
 
 ```{r}
-gradient_descent <- function(X_training,
-														 y_training,
-														 predictor_names,
-														 learning_rate = 0.01,
-														 tolerance = 0.0001,
-														 max_iterations = 10000) {
+# format the training dataset by removing the target column, adding an intercept
+# column of all 1s, and scaling the inputs before returning it as a matrix
+# (necessary for the %*% notation used)
+design_matrix <- function(training) {
+	training %>%
+		select(-c(all_of("target"))) %>%
+		mutate(intercept = 1, .before = 1) %>%
+		mutate_at(vars(-intercept), scale) %>%
+		as.matrix
+}
+
+# returns the optimal step size as computed by the Barzilai-Borwein method given
+# the current and previous beta and gradient
+update_step_size <- function(iteration, betas, gradients) {
+	betas_delta <- betas[iteration - 1,] - betas[iteration - 2,]
+	gradients_delta <- gradients[iteration - 1,] - gradients[iteration - 2,]
+# I SWEAR TO GOD LOOK INTO THIS TO LEARN ABOUT IT!!!!
+	sum(betas_delta %*% betas_delta) / sum(betas_delta %*% gradients_delta)
+}
+
+gradient_descent <- function(training, predictor_names, learning_rate = 1e-6, tolerance = 0.0001, lambda = 0.01, max_iterations = 10000) {
+	# format the X and y training values to be of use
+	X_training <- design_matrix(training)
+	y_training <- training$target
+
+	# randomly sample `p` uniformly-distributed values for the initial coefficients
+	# since the inputs are scaled in the range [0,1]
 	initial_betas <- runif(ncol(X_training))
+	
+	# each value is an iteration of updated losses to keep track of its history;
+	# the same goes for the step sizes
 	losses <- numeric(max_iterations)
-	
-	# each row is an iteration of updated betas
+	step_sizes <- numeric(max_iterations)
+
+	# each row is an iteration of updated coefficients to keep track of its history;
+	# the same goes for the gradients
 	betas <- matrix(NA, nrow = max_iterations, ncol = ncol(X_training))
+	gradients <- matrix(NA, nrow = max_iterations, ncol = ncol(X_training))
+
+	# save the initial coefficients as the randomly selected ones and manually
+	# kickstart the descent algorithm
 	betas[1,] <- initial_betas
-	losses[1] <- logistic_loss(betas[1,],
-														 X_training,
-														 y_training)
-	
-	# update the betas once manually to kickstart descent algorithm
-	betas[2,] <- betas[1,] - learning_rate * gradients(betas[1,],
-																										 X_training,
-																										 y_training)
-	losses[2] <- logistic_loss(betas[2,],
-														 X_training,
-														 y_training)
-	
+	gradients[1,] <- gradients(betas[1,], X_training, y_training, lambda)
+	step_sizes[1] <- learning_rate
+	losses[1] <- logistic_loss(betas[1,], X_training, y_training, lambda)
+
+	# another iteration of manually computing the descent algorithm to ensure
+	# that it is working before looping through
+	betas[2,] <- betas[1,] - step_sizes[1] * gradients[1,]
+	gradients[2,] <- gradients(betas[2,], X_training, y_training, lambda)
+	step_sizes[2] <- learning_rate
+	losses[2] <- logistic_loss(betas[2,], X_training, y_training, lambda)
+
 	for(iteration in 3:max_iterations) {
 		previous_beta <- betas[iteration - 1,]
-		betas[iteration,] <- previous_beta - learning_rate * gradients(previous_beta,
-																																	 X_training,
-																																	 y_training)
-		losses[iteration] <- logistic_loss(betas[iteration,],
-																			 X_training,
-																			 y_training)
+		previous_gradient <- gradients[iteration - 1,]
+		previous_step_size <- step_sizes[iteration - 1]
+
+		# compute the optimal step size using the Barzilai-Borwein method and then
+		# update the coefficients, gradients, and losses
+		step_sizes[iteration] <- update_step_size(iteration, betas, gradients)
+		betas[iteration,] <- previous_beta - step_sizes[iteration] * previous_gradient
+		gradients[iteration,] <- gradients(betas[iteration,], X_training, y_training, lambda)
+		losses[iteration] <- logistic_loss(betas[iteration,], X_training, y_training, lambda)
 		
-		loss_delta <- abs(losses[iteration] - losses[iteration - 1])
-		
-		if(loss_delta <= tolerance) {
-			losses <- losses[1:iteration]
+		# we compute the norm, or size of, the gradient vector using the L2 norm
+		# (Euclidean norm) and check if it is reasonably small enough
+		if (norm(gradients[iteration,], type = "2") < tolerance) {
+			# trim the betas, gradients, losses, and step sizes matrices/vectors
+			# as to not have a bunch of trailing zeros or NULL values and then exit
+			# the loop
 			betas <- betas[1:iteration,]
+			gradients <- gradients[1:iteration,]
+			losses <- losses[1:iteration]
+			step_sizes <- step_sizes[1:iteration]
 			break
 		}
 	}
-	
-	list(coefficients = betas,
-			 losses = losses,
-			 predictors = predictor_names)
+
+	# return all of the matrices and vectors used in a R list which will be
+	# convenient by using the `$.` notation on the model output
+	list(
+		coefficients = betas,
+		gradients = gradients,
+		losses = losses,
+		step_sizes = step_sizes,
+		predictors = c("(Intercept)", predictor_names)
+	)
 }
 ```
 
-With all of these methods defined we can fit both our own logistic regression model as well as R's built-in `glm`. Note that if we change `predictor_names` and re-run `split_data` that R's `glm` will contain the same data as our model without needing to manually update its inputs.
+Before we run our logistic regression gradient descent implementation on our project data we want to assure that it works on simulated data.
 
 ```{r}
-predictor_names <- c("chol", "thalach", "cp")
+simulate_data <- function(n_observations = 5000, p_predictors = 10) {
+	set.seed(1)
 
-splitted <- split_data(predictors = predictor_names,
-											 training_proportion = 0.7,
-											 data = Heart)
+	sparsity <- p_predictors / 2
 
-r_model <- glm(target ~ ., family = binomial, data = splitted$r_training)
+	nonzero_betas <- runif(sparsity, min = -1, max = 1)
+	true_coefficients <- c(.5, nonzero_betas, rep(0, sparsity))
 
-log_model <- gradient_descent(splitted$X_training,
-															splitted$y_training,
-															predictor_names,
-															learning_rate = 0.01,
-															tolerance = 0.01,
-															max_iterations = 10000)
+	# we again generate random values from a uniform distribution to match the scale
+	# of the inputs of the target dataset
+	raw_data <- matrix(
+		runif(n_observations * p_predictors),
+		ncol = p_predictors
+	)
+
+	X_simulated <- cbind(
+		rep(1, n_observations),
+		raw_data
+	)
+	y_simulated <- rbinom(
+		n = n_observations,
+		size = 1,
+		prob = logistic_func(X_simulated %*% true_coefficients)
+	)
+
+	# create the simulated dataset in the correct format as expected by the gradient
+	# descent method; additionally create dummy predictor names using R's default V{1,...,p}
+	# undefined column name notation
+	simulated_dataset <- cbind(X_simulated[,-1], target = y_simulated) %>% as.data.frame
+	predictor_names <- paste0("V", 1:p_predictors)
+
+	set.seed(NULL)
+
+	list(
+		data = simulated_dataset,
+		true_coefficients = true_coefficients,
+		predictors = predictor_names
+	)
+}
+
+p_predictors <- 6
+
+simulated_training <- simulate_data(n_observations = 1025, p_predictors = p_predictors)
+simulated_training$data %>% head
+simulated_training$true_coefficients %>% print
 ```
 
-We also define some more methods for analyzing each model's performance. The `compare_coefficients` function extracts the coefficients from our model (the last row in the `coefficients` matrix) and the `glm`. This extraction is neat since the gradient descent function returns the `coefficients` matrix, `losses` vector, and `predictors` vector as a list that can be access via the `$` notation. The function returns a table of both model's coefficients side-by-side. The row names are set to the same as `log_model$predictors` so it will automatically update.
+We also will define the simulated testing dataset which will be used later to evaluate the naive model later. It is generated in a similar manner to its training counterpart.
 
 ```{r}
-compare_coefficients <- function(model, r_model) {
-	final_iteration <- nrow(model$coefficients)
-	predicted_coefficients <- matrix(model$coefficients[final_iteration,])
-	r_coefficients <- matrix(r_model$coefficients)
+simulated_testing <- simulate_data(n_observations = 500, p_predictors = p_predictors)
+simulated_testing$data %>% head
+simulated_testing$true_coefficients %>% print
+```
 
-	deltas <- r_coefficients - predicted_coefficients
+We then now define our naive model by calling our `gradient_descent` implementation on the `simulated_training` object so that we can later visualize how the model performs on the testing stage and, eventually, how it performs on unseen testing data.
 
-	coefficients_comparison <- cbind(predicted_coefficients, r_coefficients, deltas)
-	colnames(coefficients_comparison) <- c("Estimates", "R estimates", "Deltas")
-	rownames(coefficients_comparison) <- c("(Intercept)", model$predictors)
+```{r}
+naive_model <- gradient_descent(
+	simulated_training$data,
+	simulated_training$predictors,
+	learning_rate = 1e-6,
+	tolerance = 1e-3,
+	lambda = 0.5,
+	max_iterations = 10000
+)
+```
+
+We additionally define some methods for understanding the output of our model including a table of coefficients, a plot of losses over iterations, a plot of step sizes over iterations, and a plot of coefficients over iterations.
+
+We can now analyze what the naive model converged on for its coefficients versus the true coefficients by using the `compare_coefficients` method. This function generates a table of true and expected coefficients with a third column being their difference to more easily view how big the difference is.
+
+```{r}
+compare_coefficients <- function(modelA_coefficients, modelB_coefficients, predictors, column_names) {
+	# compute the difference in coefficients to more easily see how off our implementation estimates are
+	# either in the case of our model versus R's `glm` version or our naive model versus the true
+	# coefficients
+	difference <- modelA_coefficients - modelB_coefficients
+
+	# assemble the table and make it more readable with meaningful column and row names
+	coefficients_comparison <- cbind(modelA_coefficients, modelB_coefficients, difference)
+	colnames(coefficients_comparison) <- c(column_names, "difference")
+	rownames(coefficients_comparison) <- predictors
+
 	coefficients_comparison
 }
+
+naive_coefficients <- naive_model$coefficients[nrow(naive_model$coefficients),]
+compare_coefficients(
+	modelA_coefficients = naive_coefficients,
+	modelB_coefficients = simulated_training$true_coefficients,
+	predictors = c("(Intercept)", simulated_training$predictors),
+	column_names = c("estimated coef.", "true coef.")
+)
 ```
 
-To see the loss history we defined the following wrapper method around a `ggplot` using `geom_line`. The subtitle dynamically updates with the parameters used in our model so that readers can remember which predictors were fitted.
+We can also observe the logistic loss history saved in the `naive_model` object and view it on a plot via the `plot_losses` function. Note that this method accepts a `model_type` parameter which is placed into the plot's title for clarity so that this function can be used by both the naive and (later) the final models.
 
 ```{r}
-plot_losses <- function(model) {
+plot_losses <- function(model, model_type = "normal") {
 	n_iterations <- length(model$losses)
+	min_loss <- min(model$losses)
 
 	ggplot(data.frame(iteration = 1:n_iterations, loss = model$losses)) +
-		geom_line(aes(x = iteration, y = loss, color = "blue"), size = 2) +
-		labs(title = "Losses of binary cross-entropy over iterations",
-				 subtitle = paste("Fitted on the predictor(s)", toString(model$predictors)),
-				 caption = "Data from the 1988 UCI Heart Disease study") +
+		# connect each loss value per iteration with a solid blue line
+		geom_line(aes(x = iteration, y = loss), color = "blue", linewidth = 1) +
+		# visibly show where the minimum loss achieved is and add text with the number
+		geom_hline(yintercept = min_loss, linetype = "dotted", color = "gray", linewidth = 0.75) +
+		annotate("text", x = n_iterations * 0.9, y = min_loss, label = paste("minimum loss:", round(min_loss, 2)), vjust = -0.5, color = "darkgray") +
+		scale_x_continuous(
+			limits = c(1, n_iterations),
+			breaks = c(1:n_iterations)
+		) +
+		# we use the parameter `model_type` since we use this same method for both our actual model
+		# and the naive model
+		labs(
+			title = paste("Losses of binary cross-entropy of", model_type, "model over iterations"),
+			subtitle = paste("Fitted on the predictor(s)", toString(model$predictors)),
+			caption = "Data from the 1988 UCI Heart Disease study"
+		) +
 		theme_classic() +
 		theme(legend.position = "none") +
 		xlab("Iteration") +
 		ylab("Loss")
 }
+
+plot_losses(model = naive_model, model_type = "naive")
 ```
 
+We can additionally observe the step sizes history saved in the `naive_model` object and view it on a plot via the `plot_steps` function. It is nearly identical to `plot_losses` but with different labels and verbiage.
+
 ```{r}
-compare_coefficients(log_model, r_model)
-plot_losses(log_model)
+plot_steps <- function(model, model_type = "normal") {
+	n_iterations <- length(model$step_sizes)
+	min_step <- min(model$step_sizes)
+
+	ggplot(data.frame(iteration = 1:n_iterations, step = model$step_sizes)) +
+		# connect each step size value per iteration with a solid blue line
+		geom_line(aes(x = iteration, y = step), color = "blue", linewidth = 1) +
+		# visibly show where the minimum step size achieved is and add text with the number
+		geom_hline(yintercept = min_step, linetype = "dotted", color = "gray", linewidth = 0.75) +
+		annotate("text", x = n_iterations * 0.9, y = min_step, label = paste("minimum step:", round(min_step, 2)), vjust = -0.5, color = "darkgray") +
+		scale_x_continuous(
+			limits = c(1, n_iterations),
+			breaks = c(1:n_iterations)
+		) +
+		labs(
+			title = paste("Barzilai-Borwein step sizes of", model_type, "model over iterations"),
+			subtitle = paste("Fitted on the predictor(s)", toString(model$predictors)),
+			caption = "Data from the 1988 UCI Heart Disease study"
+		) +
+		theme_classic() +
+		theme(legend.position = "none") +
+		xlab("Iteration") +
+		ylab("Step size")
+}
+
+plot_steps(model = naive_model, model_type = "naive")
 ```
 
-We see that our coefficients are very similar to the `glm` coefficients suggesting that our gradient descent model is behaving optimally. The helpful `deltas` column allows readers to quickly identify the distances of each predicted coefficient between the two models which are minuscule.
-
-The losses history graph similar shows a decrease from a high starting loss to a lower ending loss. Our implementation did not need many iterations to converge.
-
-We finally wish to test both models and evaluate their prediction accuracies. We easily find both our training and testing predictions by applying $X\beta^{(N)}$ on the testing subset where $\beta^{(N)}$ are the betas found from the final iteration of the gradient descent. Since these vectors are probabilities we transform them into binary predictions by setting values above a given threshold to `1` and values under the threshold to `0`. We follow a similar procedure for the `glm` predictions. Now the variables `?_classes` are binary vectors just like `y_training` and `y_testing`.
-
-For the training, testing, and `glm` accuracies we compare each respective `?_classes` with the true `y` values. This will return a binary vector with `1` in indices where the model predicted correctly and `0` in indices where the model predicted incorrectly. Taking the mean of this vector finds the respective accuracy.
-
-We also seek to find the area under the curve (AUC) of the Receiver Operating Characteristic (ROC). **EXPLAIN THIS PORTION BETTER LATER.**
+We lastly observe the coefficients history saved in the `naive_model` object and view it on a plot via the `plot_steps` function. This allows readers to see, first off, a snapshot of all the coefficients across the iterations and, secondly, see how each coefficient changes throughout the descent.
 
 ```{r}
-compare_predictions <- function(splitted, model, r_model, threshold = 0.5) {
-	final_betas <- model$coefficients[nrow(model$coefficients),]
+plot_betas <- function(model, model_type = "normal") {
+	n_iterations <- nrow(model$coefficients)
 
-	predictions_training <- logistic_func(splitted$X_training %*% final_betas)
-	predictions_testing <- logistic_func(splitted$X_testing %*% final_betas)
+	to_plot <- data.frame(
+		iteration = c(1:n_iterations),
+		coefficient = as.data.frame(model$coefficients)
+	)
+	colnames(to_plot) <- c("iteration", model$predictors)
 
-	training_classes <- ifelse(predictions_training >= threshold, 1, 0)
-	testing_classes <- ifelse(predictions_testing >= threshold, 1, 0)
+	# we re-shape the data so that we can connect each coefficient across iterations AND
+	# show all coefficients at each snapshot via pivoting the dataframe longwise
+	to_plot <- to_plot %>%
+		pivot_longer(cols = -iteration, names_to = "predictor", values_to = "coefficient")
 
-	r_predictions <- predict(r_model, newdata = splitted$r_testing, type = "response")
-	r_classes <- ifelse(r_predictions >= threshold, 1, 0)
+	ggplot(to_plot, aes(x = iteration, y = coefficient, color = predictor)) +
+		geom_point(size = 3, stroke = 1.2) +
+		geom_line() +
+		scale_x_continuous(
+			limits = c(1, n_iterations),
+			breaks = c(1:n_iterations)
+		) +
+		labs(x = "Iteration", y = "Coefficient") +
+		labs(
+			title = paste("Esimated coefficients of the", model_type, "model over iterations"),
+			subtitle = paste("Fitted on the predictor(s)", toString(model$predictors)),
+			caption = "Data from the 1988 UCI Heart Disease study"
+		) +
+		theme_minimal()
+}
 
+plot_betas(model = naive_model, model_type = "naive")
+```
+
+Having analyzed the naive model coefficients and visualized the losses and step sizes, we now seek to evaluate it by applying the `testing` subset and seeing how accurate its predictions are. We do this with the `prediction_metrics` method.
+
+```{r include=FALSE}
+as_grade <- function(raw_score) {
+	# convert scores of the form 0.xxxxxxx to xx.xx for easier readability of model accuracy
+	# as a percentage
+	round(raw_score * 100, 2)
+}
+
+prediction_metrics <- function(model, training, testing, model_type = "normal", is_glm = FALSE) {
+	# save the vectors of true classes from the training and testing subsets, respectively
+	true_classes_training <- training$target
+	true_classes_testing <- testing$target
+	
+	# if using the `glm` model, the inputs need to be scaled to match the inputs passed into the
+	# naive and normal models AND the prediction step is different (built-in R function)
+	if(is_glm) {
+		r_training <- training %>% mutate_at(vars(-target), scale)
+		r_testing <- testing %>% mutate_at(vars(-target), scale)
+		
+		predictions_training <- predict(model, newdata = r_training, type = "response")
+		predictions_testing <- predict(model, newdata = r_testing, type = "response")
+	} else {
+		X_training <- design_matrix(training)
+		X_testing <- design_matrix(testing)
+		
+		final_betas <- model$coefficients[nrow(model$coefficients),]
+		
+		predictions_training <- logistic_func(X_training %*% final_betas)
+		predictions_testing <- logistic_func(X_testing %*% final_betas)
+	}
+	
+	# convert the probabilities in `predictions_training` and `predictions_testing` into definitive
+	# classifications of 0 or 1 depending on if the calculated probability p >= 0.5 or not
+	prediction_classes_training <- as.vector(ifelse(predictions_training >= 0.5, 1, 0))
+	prediction_classes_testing <- as.vector(ifelse(predictions_testing >= 0.5, 1, 0))
+
+	# we use mean(...) since these are vectors of 0 and 1 so it effectively computes the accuracy;
+	# we use the roc and auc methods from the pROC library
+	training_accuracy <- mean(prediction_classes_training == true_classes_training)
+	training_auc <- auc(roc(response = true_classes_training, predictor = prediction_classes_training))
+	
+	testing_accuracy <- mean(prediction_classes_testing == true_classes_testing)
+	testing_auc <- auc(roc(response = true_classes_testing, predictor = prediction_classes_testing))
+	
+	# return all of these vectors and matrices for visualization and later analysis
 	list(
-		training_accuracy = mean(training_classes == splitted$y_training),
-		training_auc = auc(roc(splitted$y_training, as.vector(training_classes), quiet = TRUE)),
-		testing_accuracy = mean(testing_classes == splitted$y_testing),
-		testing_auc = auc(roc(splitted$y_testing, as.vector(testing_classes), quiet = TRUE)),
-		r_accuracy = mean(r_classes == splitted$y_testing),
-		r_auc = auc(roc(splitted$y_testing, as.vector(r_classes), quiet = TRUE))
+		true_classes_training = true_classes_training,
+		true_classes_testing = true_classes_testing,
+		prediction_classes_training = prediction_classes_training,
+		prediction_classes_testing = prediction_classes_testing,
+		training_accuracy = as_grade(training_accuracy),
+		training_auc = as_grade(training_auc),
+		testing_accuracy = as_grade(testing_accuracy),
+		testing_auc = as_grade(testing_auc),
+		model_type = model_type
 	)
 }
 
-display_metrics <- function(metrics) {
-	neat_metrics <- data.frame(
-		Training = c(metrics$training_accuracy, metrics$training_auc),
-		Testing = c(metrics$testing_accuracy, metrics$testing_auc),
-		R = c(metrics$r_accuracy, metrics$r_auc)
-	)
+naive_metrics <- prediction_metrics(
+	model = naive_model,
+	training = simulated_training$data,
+	testing = simulated_testing$data,
+	model_type = "naive",
+	is_glm = FALSE
+)
+```
 
-	row.names(neat_metrics) <- c("accuracy", "AUC")
+We will analyze the metrics of the naive model once we do the same with the normal model and R's `glm` model. Now we create these model objects and examine the output of the normal model output.
 
-	neat_metrics
-}
+```{r}
+log_model <- gradient_descent(
+	training = training,
+	predictor_names = predictor_names,
+	learning_rate = 1e-2,
+	tolerance = 1e-5,
+	lambda = 0.4,
+	max_iterations = 10000
+)
+
+r_training <- training %>% mutate_at(vars(-target), scale)
+r_model <- glm(target ~ ., family = binomial, data = r_training)
+```
+
+Because we do not know the "true coefficients" of our actual heart disease dataset we instead compare our model's coefficients against R's `glm` model's coefficients to see how similar the values are. As seen in the table blow, the difference between our model and R's coefficients are on the scale of $10^{-3}$ and smaller.
+
+```{r}
+log_coefficients <- log_model$coefficients[nrow(log_model$coefficients),]
+compare_coefficients(
+	modelA_coefficients = log_coefficients,
+	modelB_coefficients = r_model$coefficients,
+	predictors = log_model$predictors,
+	column_names = c("model coef.", "R glm coef.")
+)
 ```
 
 ```{r}
-metrics <- compare_predictions(splitted, log_model, r_model, threshold = 0.5)
-display_metrics(metrics)
+summary(r_model)
 ```
 
-The area under the curve for all models are **EXPLAIN THIS PART BETTER LATER.**
+Examining the $p$-values for these coefficients we see that [EXAMINE THE TRUE PREDICTORS USED ONCE HAVING DONE STEPWISE SELECTION!!!!]
+
+```{r}
+plot_losses(model = log_model, model_type = "normal")
+plot_steps(model = log_model, model_type = "normal")
+plot_betas(model = log_model, model_type = "normal")
+```
+
+We see that the logistic loss decreases sharply and lands on a minimum loss of 384.18 at around 13 iterations. The step size history is more random but regardless the movement of the gradient vector is extremely small as shown by the scale of the $y$-axis. Finally, ... [FIX ALL OF THIS WITH THE ACTUAL PREDICTORS IN USE].
+
+We can now analyze the prediction metrics of our model and R's `glm` model to evaluate their effectiveness as well as compare to our naive model.
+
+```{r include=FALSE}
+log_metrics <- prediction_metrics(
+	model = log_model,
+	training = training,
+	testing = testing,
+	model_type = "normal",
+	is_glm = FALSE
+)
+
+r_metrics <- prediction_metrics(
+	model = r_model,
+	training = training,
+	testing = testing,
+	model_type = "glm",
+	is_glm = TRUE
+)
+```
+
+We now look at the accuracy and AUC metrics across all three models as summarized in the following table.
+
+```{r}
+all_metrics <- data.frame(
+	"training accuracy" = c(
+		naive_metrics$training_accuracy,
+		log_metrics$training_accuracy,
+		r_metrics$training_accuracy
+	),
+	"training auc" = c(
+		naive_metrics$training_auc,
+		log_metrics$training_auc,
+		r_metrics$training_auc
+	),
+	"testing accuracy" = c(
+		naive_metrics$testing_accuracy,
+		log_metrics$testing_accuracy,
+		r_metrics$testing_accuracy
+	),
+	"testing auc" = c(
+		naive_metrics$testing_auc,
+		log_metrics$testing_auc,
+		r_metrics$testing_auc
+	)
+)
+
+rownames(all_metrics) <- c("naive model", "normal model", "glm model")
+colnames(all_metrics) <- c("training accuracy", "training auc", "testing accuracy", "testing auc")
+
+all_metrics
+```
+
+We want to also view the Receiver Operating Characteristic (ROC) curve available via the `pROC` library in our wrapper function of `plot_ROC` to compare the true and false positive rates. Note that this is plotted on the `testing` data as another visualization of model accuracy. As expected, the naive model is slightly over 50% which indicates that our gradient descent implementation picks up some slight noise in the data but is overall not much better than flipping a coin to determine heart disease presence based on [INSERT CHOSEN PREDICTORS HERE].
+
+```{r}
+plot_ROC <- function(metrics, curve_color, y_height, add_to = FALSE) {
+	# `y_height` is the height where the AUC percentage label is printed so that they do not
+	# overlap; `add_to` is needed to overlap the naive, normal, and glm model ROC curves
+	roc_object <- roc(
+		response = metrics$true_classes_testing,
+		predictor = metrics$prediction_classes_testing,
+		plot = TRUE,
+		percent = TRUE,
+		xlab = "False positive percentage",
+		ylab = "True positive percentage",
+		col = curve_color,
+		lwd = 3,
+		print.auc = TRUE,
+		print.auc.y = y_height,
+		add = add_to,
+		quiet = TRUE
+	)
+}
+
+plot_ROC(metrics = naive_metrics, curve_color = "red", y_height = 45, add_to = FALSE)
+plot_ROC(metrics = log_metrics, curve_color = "blue", y_height = 35, add_to = TRUE)
+plot_ROC(metrics = r_metrics, curve_color = "lightgreen", y_height = 25, add_to = TRUE)
+
+models <- c("naive model", "normal model", "glm model")
+colors <- c("red", "blue", "lightgreen")
+
+legend("bottomright", legend = models, col = colors, lwd = 3)
+```
