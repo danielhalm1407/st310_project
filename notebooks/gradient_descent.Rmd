@@ -1,36 +1,66 @@
 ---
 title: "Gradient Descent Implementation for a Logistic Regression Model"
 output:
-  pdf_document: default
   html_document:
     df_print: paged
+  pdf_document: default
 ---
 
 ```{r include=FALSE}
 library(tidyverse)
 library(tidymodels)
+library(corrplot)
+library(leaps)
 library(pROC)
 
 Heart <- read.csv("../data/Heart.csv")
 ```
 
+### Introducing the context for logistic gradient descent
+
 We implemented a simple gradient descent algorithm to classify if patients have a presence of coronary artery disease or not given $p \in \mathbb{N}$ medical characteristics $\boldsymbol{\theta} = (\theta_{1}, \dots, \theta_{p})^\mathsf{T}$.
 
 Consider a regularized logistic regression model with the parameters $\boldsymbol{\beta}$ being a $(p+1) \times 1$ column vector containing our medical characteristics of interest ($\boldsymbol{\theta}$) and an added intercept coefficient. We are given $N \in \mathbb{Z}$ observations. Let $\boldsymbol{X} = (x_{1}, \dots, x_{N})$ be the design matrix of size $N \times (p+1)$ for the input space where each $\boldsymbol{x_{i}}$ is a row vector of dimension $1 \times (p+1)$ denoting the $i$-th row of observations. Finally, suppose $\boldsymbol{y} = (y_{1}, ..., y_{N})^\mathsf{T}$ be the target classes column vector of dimension $N \times 1$ representing if each observation has CAD or not.
 
-We first define our predictors of interest in a vector which is used throughout our implementation. We then filter the dataset for the requested predictors and the the binary response `target` before passing this subset into the `tidymodel` method `initial_split`, subdividing the data into 70% `training` and 30% `testing`.
+### Feature selection via best subsets
+
+We first need to select our medical features of interest. Because we want this model to be relatively explainable, and figuring out how to include interactive terms is beyond the scope of this project, we want a smaller input space. We decide to use forward stepwise selection as shown below.
 
 ```{r}
-predictor_names <- c("chol", "thalach", "cp")
+# need to set a seed otherwise the "best" 3-predictor model changes every run from the randomness in the `initial_split` function
+set.seed(6849)
 
-data_subset <- Heart %>% select(all_of(predictor_names), "target")
-Heart_split <- initial_split(data_subset, prop = 0.7)
+Heart_split <- initial_split(Heart, prop = 0.7)
 
-training <- Heart_split %>% training()
-testing <- Heart_split %>% testing()
+subset_selection <- regsubsets(target ~ ., data = Heart_split %>% training())
+summary(subset_selection)
+
+predictor_names <- c("exang", "oldpeak", "ca")
+
+training <- Heart_split %>% training() %>% select(all_of(predictor_names), "target")
+testing <- Heart_split %>% testing() %>% select(all_of(predictor_names), "target")
 ```
 
-We seek to find the optimal coefficients $\boldsymbol{\beta} = (\beta_{0}, \dots, \beta_{p})^\mathsf{T}$ that minimizes the negative log-likelihoods with some added positive penalty term $\lambda \in \mathbb{R}$. We decided to go for an L2 (ridge) regularization because [EXPLAIN WHY HERE!!!!!!!!] The negative log-likelihoods, also known as the logistic loss, are given by the following equation
+We see that the best 3-predictor model includes `exang`, `oldpeak`, and `ca` which are exercised induced angina, ST depression induced by angina, and the number of major vessels colored by fluoroscopy. We analyze the correlations between these predictors and see that there are some moderately positive correlation happening as shown in the correlation heatmap below. This correlation suggests some multicollinearity is happening.
+
+```{r}
+correlation_matrix <- cor(Heart %>% select(all_of(predictor_names)))
+corrplot(corr = correlation_matrix,method = "color")
+```
+
+We first define our predictors of interest in a vector which is used throughout our implementation. We then filter the dataset for the requested predictors and the the binary response `target` before passing this subset into the `tidymodel` method `initial_split` further subdividing the data into a 70% `training` and 30% `testing` split.
+
+### Mathematical derivations of logistic loss and its gradient
+
+We seek to find the optimal coefficients $\boldsymbol{\beta} = (\beta_{0}, \dots, \beta_{p})^\mathsf{T}$ that minimizes the negative log-likelihoods with some added positive penalty term $\lambda \in \mathbb{R}$. We decided to go for an L2 (ridge) regularization because of the following reasons:
+
+-   We are building a simpler model with fewer predictors and so we ideally do not want them to shrink to zero, which would be the case if we used L1 lasso regularization;
+
+-   The presence of slight multicollinearity suggests that ridge regression will outperform lasso regression since it distributes the penalty across the correlated predictors; and
+
+-   L2 regularization is mathematically differentiable everywhere since it is a sum of squares whereas L1 uses a sum of absolutes which complicates our analytical solution.
+
+The negative log-likelihoods, also known as the logistic loss, are given by the following equation
 
 $$
 \ell(\beta \; ; \; y  \, \vert \, x) = -\sum_{i=0}^{n} \left [ \, y_{i} \log(\sigma(x_{i})) + (1 - y_{i}) \log(1 - \sigma(x_{i})) \, \right] + \lambda \sum_{j=1}^{p} \beta_{j}^{2},
@@ -65,6 +95,10 @@ $$
 
 (Notice we distributed the negative in front of the summation through and factored out the $x_{i}$ found in both terms). We define these functions in R for later in the implementation.
 
+### Defining the necessary functions to implement gradient descent
+
+We separate out different components of the gradient descent algorithm in smaller, easier to understand functions. This helps to make the code more readable and easier to debug. We first define the methods `logistic_func`, `logistic_loss`, and `gradients` based on the mathematical derivations found above.
+
 ```{r}
 # s-shaped sigmoid function
 logistic_func <- function(logits) {
@@ -73,8 +107,8 @@ logistic_func <- function(logits) {
 
 # implemented using L2 ridge regularization (note: the intercept term does not get penalized)
 logistic_loss <- function(betas, X, y, lambda) {
-	# note that `y_hats` are the predicted conditional probabilities having applied the sigmoid function
-	# on the design matrix and coefficients product NOT the predicted classes of heart disease presence
+	# note that `y_hats` are the predicted conditional probabilities having applied the sigmoid function on the design matrix and coefficients product NOT the predicted
+	# classes of heart disease presence
 	y_hats <- logistic_func(X %*% betas)
 	penalty <- lambda * sum(betas[-1] * betas[-1])
 	
@@ -84,8 +118,8 @@ logistic_loss <- function(betas, X, y, lambda) {
 # this function is not a numeric approximation of the gradient but rather the direct analytical
 # functional form as derived in the mathematics above
 gradients <- function(betas, X, y, lambda) {
-	# note that `y_hats` are the predicted conditional probabilities having applied the sigmoid function
-	# on the design matrix and coefficients product NOT the predicted classes of heart disease presence
+	# note that `y_hats` are the predicted conditional probabilities having applied the sigmoid function on the design matrix and coefficients product NOT the predicted
+	# classes of heart disease presence
 	y_hats <- logistic_func(X %*% betas)
 	
 	# separate the logistic and penalty terms to compute gradients easier
@@ -97,7 +131,7 @@ gradients <- function(betas, X, y, lambda) {
 }
 ```
 
-Something else goes here.
+The baseline helper functions are now defined to be used later on. Our implementation requires that the input space be a matrix $\boldsymbol{X}$ of a specific format which `design_matrix` forces data to conform to. The `update_step_size` uses the Barzilai-Borwein (BB) method for updating how big the gradient should move (its step size) each iteration of the descent based on the two previous estimated coefficients and gradients. We settled on using BB to help the model more dynamically converge without setting an arbitrary learning rate. Finally, the `gradient_descent` function uses all of the previously defined methods to run logistic gradient descent given some tuning parameters (such as learning rate and lambda) and returns histories of the coefficients, gradients, losses, step sizes, and predictor names.
 
 ```{r}
 # format the training dataset by removing the target column, adding an intercept
@@ -107,7 +141,7 @@ design_matrix <- function(training) {
 	training %>%
 		select(-c(all_of("target"))) %>%
 		mutate(intercept = 1, .before = 1) %>%
-		# mutate_at(vars(-intercept), scale) %>%
+		mutate_at(vars(-intercept), scale) %>%
 		as.matrix
 }
 
@@ -116,11 +150,12 @@ design_matrix <- function(training) {
 update_step_size <- function(iteration, betas, gradients) {
 	betas_delta <- betas[iteration - 1,] - betas[iteration - 2,]
 	gradients_delta <- gradients[iteration - 1,] - gradients[iteration - 2,]
-# I SWEAR TO GOD LOOK INTO THIS TO LEARN ABOUT IT!!!!
+
+	# we have found that taking long BB step sizes works better for these data
 	sum(betas_delta %*% betas_delta) / sum(betas_delta %*% gradients_delta)
 }
 
-gradient_descent <- function(training, predictor_names, learning_rate = 1e-6, tolerance = 0.0001, lambda = 0.01, max_iterations = 10000) {
+gradient_descent <- function(training, predictor_names, lambda, tolerance, max_iterations) {
 	# format the X and y training values to be of use
 	X_training <- design_matrix(training)
 	y_training <- training$target
@@ -128,6 +163,7 @@ gradient_descent <- function(training, predictor_names, learning_rate = 1e-6, to
 	# randomly sample `p` uniformly-distributed values for the initial coefficients
 	# since the inputs are scaled in the range [0,1]
 	initial_betas <- runif(ncol(X_training))
+	initial_step_size <- runif(1, min = 0.001, max = 0.01)
 	
 	# each value is an iteration of updated losses to keep track of its history;
 	# the same goes for the step sizes
@@ -143,16 +179,16 @@ gradient_descent <- function(training, predictor_names, learning_rate = 1e-6, to
 	# kickstart the descent algorithm
 	betas[1,] <- initial_betas
 	gradients[1,] <- gradients(betas[1,], X_training, y_training, lambda)
-	step_sizes[1] <- learning_rate
+	step_sizes[1] <- initial_step_size
 	losses[1] <- logistic_loss(betas[1,], X_training, y_training, lambda)
 
 	# another iteration of manually computing the descent algorithm to ensure
 	# that it is working before looping through
 	betas[2,] <- betas[1,] - step_sizes[1] * gradients[1,]
 	gradients[2,] <- gradients(betas[2,], X_training, y_training, lambda)
-	step_sizes[2] <- learning_rate
+	step_sizes[2] <- initial_step_size
 	losses[2] <- logistic_loss(betas[2,], X_training, y_training, lambda)
-
+	
 	for(iteration in 3:max_iterations) {
 		previous_beta <- betas[iteration - 1,]
 		previous_gradient <- gradients[iteration - 1,]
@@ -191,13 +227,17 @@ gradient_descent <- function(training, predictor_names, learning_rate = 1e-6, to
 }
 ```
 
+### Explanation of why feature scaling was necessary
+
 Note that we scale every column in the input space (besides the intercept and target columns) in the `design_matrix` function. When we ran this gradient descent algorithm on unscaled values the logistic loss broke down after the first few iterations. A deeper examination revealed that the scale of the input values could range from 126–564 mg/dL (in the case of cholesterol) whereas our response is only binary. This size difference meant that $\boldsymbol{X\beta}$ would either produce extremely large or extremely small values which would become numerically unstable once the sigmoid function was applied $\sigma(\boldsymbol{X\beta})$.
 
 Consider if $\sigma(\boldsymbol{X\beta}) = 0$. Then, $\log(\sigma(\boldsymbol{X\beta})) = \log(0)$ which is undefined. Similarly, if $\sigma(\boldsymbol{X\beta}) = 1$ then, $\log(1-\sigma(\boldsymbol{X\beta})) = \log(0)$ which is also undefined. The output of sigmoid being exactly 0 or exactly 1 happens when the result of $\boldsymbol{X\beta}$ is numerically unstable. The `logistic_loss` method would save the current iteration's loss as `NaN` (not a number) in the losses history every iteration. The `coefficients` and `gradients` contained large vectors meaning the descent jumped around a lot and never converged on the local minima, only stopping due to the `max_iterations` being met.
 
 We scaled down the input space $\boldsymbol{X}$ (besides the intercept and target columns) to combat the numerical instability and our implementation works as expected.
 
-Before we run our logistic regression gradient descent implementation on our project data we want to assure that it works on simulated data.
+### Simulating training and testing data for a naive model
+
+Before we run our logistic regression gradient descent implementation on our project data we want to assure that it works on simulated data. The following method does this and we show a preview of the generated data as well as the true coefficients.
 
 ```{r}
 simulate_data <- function(n_observations = 5000, p_predictors = 10) {
@@ -240,9 +280,9 @@ simulate_data <- function(n_observations = 5000, p_predictors = 10) {
 	)
 }
 
-p_predictors <- 6
+p_predictors <- 4
 
-simulated_training <- simulate_data(n_observations = 1025, p_predictors = p_predictors)
+simulated_training <- simulate_data(n_observations = 2000, p_predictors = p_predictors)
 simulated_training$data %>% head
 simulated_training$true_coefficients %>% print
 ```
@@ -250,10 +290,12 @@ simulated_training$true_coefficients %>% print
 We also will define the simulated testing dataset which will be used later to evaluate the naive model later. It is generated in a similar manner to its training counterpart.
 
 ```{r}
-simulated_testing <- simulate_data(n_observations = 500, p_predictors = p_predictors)
+simulated_testing <- simulate_data(n_observations = 1000, p_predictors = p_predictors)
 simulated_testing$data %>% head
 simulated_testing$true_coefficients %>% print
 ```
+
+### Creating the naive model and analyzing its outputs
 
 We then now define our naive model by calling our `gradient_descent` implementation on the `simulated_training` object so that we can later visualize how the model performs on the testing stage and, eventually, how it performs on unseen testing data.
 
@@ -261,9 +303,8 @@ We then now define our naive model by calling our `gradient_descent` implementat
 naive_model <- gradient_descent(
 	simulated_training$data,
 	simulated_training$predictors,
-	learning_rate = 1e-6,
-	tolerance = 1e-3,
-	lambda = 0.5,
+	lambda = 1.7,
+	tolerance = 1e-5,
 	max_iterations = 10000
 )
 ```
@@ -334,14 +375,10 @@ We can additionally observe the step sizes history saved in the `naive_model` ob
 ```{r}
 plot_steps <- function(model, model_type = "normal") {
 	n_iterations <- length(model$step_sizes)
-	min_step <- min(model$step_sizes)
 
 	ggplot(data.frame(iteration = 1:n_iterations, step = model$step_sizes)) +
 		# connect each step size value per iteration with a solid blue line
 		geom_line(aes(x = iteration, y = step), color = "blue", linewidth = 1) +
-		# visibly show where the minimum step size achieved is and add text with the number
-		geom_hline(yintercept = min_step, linetype = "dotted", color = "gray", linewidth = 0.75) +
-		annotate("text", x = n_iterations * 0.9, y = min_step, label = paste("minimum step:", round(min_step, 2)), vjust = -0.5, color = "darkgray") +
 		scale_x_continuous(
 			limits = c(1, n_iterations),
 			breaks = c(1:n_iterations)
@@ -470,9 +507,8 @@ We will analyze the metrics of the naive model once we do the same with the norm
 log_model <- gradient_descent(
 	training = training,
 	predictor_names = predictor_names,
-	learning_rate = 1e-2,
-	tolerance = 1e-5,
 	lambda = 1.7,
+	tolerance = 1e-5,
 	max_iterations = 10000
 )
 
@@ -492,11 +528,13 @@ compare_coefficients(
 )
 ```
 
+To see the significance of the selected predictors in explaining our response, we examine the model output of `glm`. We see from the table below that `exang`, `oldpeak`, and `ca` are all statistically significant quantities.
+
 ```{r}
 summary(r_model)
 ```
 
-Examining the $p$-values for these coefficients we see that [EXAMINE THE TRUE PREDICTORS USED ONCE HAVING DONE STEPWISE SELECTION!!!!]
+Examining the $p$-values for these coefficients we see that `exang`, `oldpeak`, and `ca` are all statistically significant predictors (all $< 0.5 = \alpha$) in explaining the presence of coronary artery disease.
 
 ```{r}
 plot_losses(model = log_model, model_type = "normal")
@@ -504,7 +542,40 @@ plot_steps(model = log_model, model_type = "normal")
 plot_betas(model = log_model, model_type = "normal")
 ```
 
-We see that the logistic loss decreases sharply and lands on a minimum loss of 384.18 at around 13 iterations. The step size history is more random but regardless the movement of the gradient vector is extremely small as shown by the scale of the $y$-axis. Finally, ... [FIX ALL OF THIS WITH THE ACTUAL PREDICTORS IN USE].
+We see that the logistic loss decreases sharply and lands on a minimum loss of 358.72 at around 15 iterations. The step size history is more random but regardless the movement of the gradient vector is extremely small as shown by the scale of the $y$-axis. Finally, the estimated coefficients over iterations plot shows that our model starts to level off after around the 5th iteration.
+
+Another way that we can visualize our model's versus R's `glm` model's coefficients is by layering them over iterations like shown in the plot below. We use a custom method called `coefficients_comparison`.
+
+```{r}
+coefficients_comparison <- function(model, r_model) {
+	final_coefficients <- model$coefficients[nrow(model$coefficients),]
+	r_coefficients <- r_model$coefficients
+
+	predictors <- model$predictors
+
+	to_plot <- data.frame(
+		predictor = factor(predictors, levels=predictors),
+		normal_coefficients = final_coefficients,
+		glm_coefficients = r_coefficients
+	) %>% pivot_longer(
+		cols = -predictor,
+		names_to = "model",
+		values_to = "coefficient"
+	)
+
+	ggplot(to_plot, aes(x = predictor, y = coefficient, shape = model, color = model)) +
+		geom_point(size = 3, stroke = 1.2) +
+		labs(x = "Predictor", y = "Coefficient") +
+		labs(title = "Comparing estimated coefficients between our normal and glm models",
+				 subtitle = paste("Fitted on the predictor(s)", toString(predictors)),
+				 caption = "Data from the 1988 UCI Heart Disease study") +
+		theme_minimal()
+}
+
+coefficients_comparison(model = log_model, r_model = r_model)
+```
+
+From the above plot we see that our normal model and R's `glm` model have essentially the same coefficients which matches the comparison table seen earlier. On average, our model coefficients are slightly higher than R's `glm` coefficients but not by a lot as shown by the small scale on the $y$-axis.
 
 We can now analyze the prediction metrics of our model and R's `glm` model to evaluate their effectiveness as well as compare to our naive model.
 
@@ -558,7 +629,7 @@ colnames(all_metrics) <- c("training accuracy", "training auc", "testing accurac
 all_metrics
 ```
 
-We want to also view the Receiver Operating Characteristic (ROC) curve available via the `pROC` library in our wrapper function of `plot_ROC` to compare the true and false positive rates. Note that this is plotted on the `testing` data as another visualization of model accuracy. As expected, the naive model is slightly over 50% which indicates that our gradient descent implementation picks up some slight noise in the data but is overall not much better than flipping a coin to determine heart disease presence based on [INSERT CHOSEN PREDICTORS HERE].
+We want to also view the Receiver Operating Characteristic (ROC) curve available via the `pROC` library in our wrapper function of `plot_ROC` to compare the true and false positive rates. Note that this is plotted on the `testing` data as another visualization of model accuracy. As expected, the naive model is slightly over 50% which indicates that our gradient descent implementation picks up some slight noise in the data but is overall not much better than flipping a coin to determine heart disease presence based on `exang`, `oldpeak`, and `ca`. Alternatively, our model and R's `glm` model both have an AUC of 81% which suggests that they perform strongly in distinguishing between CAD presence and absence.
 
 ```{r}
 plot_ROC <- function(metrics, curve_color, y_height, add_to = FALSE) {
@@ -589,3 +660,18 @@ colors <- c("red", "blue", "lightgreen")
 
 legend("bottomright", legend = models, col = colors, lwd = 3)
 ```
+
+The above ROC plot is useful to see visually how the models compare but we would like to see hard values for the true and false positives and negatives across the testing subset for our model. This is done through the confusion matrix shown below.
+
+```{r}
+testing_df <- data.frame(
+	y = as.factor(testing$target),
+	y_hat = as.factor(log_metrics$prediction_classes_testing)
+)
+confusion_matrix <- testing_df %>% 
+	conf_mat(truth = y, estimate = y_hat) %>% 
+	autoplot(type = "heatmap") %>%
+	print
+```
+
+As we see from the confusion matrix above our model correctly classifies heart disease prevalence the majority of the time, with the the few false negatives and false positives relatively balanced. This suggests that our model performs moderately well on the holdout data which is supported by an AUC score of around 79.4%.
