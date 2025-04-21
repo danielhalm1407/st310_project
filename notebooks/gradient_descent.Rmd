@@ -14,6 +14,10 @@ library(pROC)
 Heart <- read.csv("../data/Heart.csv")
 ```
 
+We implemented a simple gradient descent algorithm to classify if patients have a presence of coronary artery disease or not given $p \in \mathbb{N}$ medical characteristics $\boldsymbol{\theta} = (\theta_{1}, \dots, \theta_{p})^\mathsf{T}$.
+
+Consider a regularized logistic regression model with the parameters $\boldsymbol{\beta}$ being a $(p+1) \times 1$ column vector containing our medical characteristics of interest ($\boldsymbol{\theta}$) and an added intercept coefficient. We are given $N \in \mathbb{Z}$ observations. Let $\boldsymbol{X} = (x_{1}, \dots, x_{N})$ be the design matrix of size $N \times (p+1)$ for the input space where each $\boldsymbol{x_{i}}$ is a row vector of dimension $1 \times (p+1)$ denoting the $i$-th row of observations. Finally, suppose $\boldsymbol{y} = (y_{1}, ..., y_{N})^\mathsf{T}$ be the target classes column vector of dimension $N \times 1$ representing if each observation has CAD or not.
+
 We first define our predictors of interest in a vector which is used throughout our implementation. We then filter the dataset for the requested predictors and the the binary response `target` before passing this subset into the `tidymodel` method `initial_split`, subdividing the data into 70% `training` and 30% `testing`.
 
 ```{r}
@@ -69,13 +73,19 @@ logistic_func <- function(logits) {
 
 # implemented using L2 ridge regularization (note: the intercept term does not get penalized)
 logistic_loss <- function(betas, X, y, lambda) {
+	# note that `y_hats` are the predicted conditional probabilities having applied the sigmoid function
+	# on the design matrix and coefficients product NOT the predicted classes of heart disease presence
 	y_hats <- logistic_func(X %*% betas)
 	penalty <- lambda * sum(betas[-1] * betas[-1])
 	
 	-sum(y * log(y_hats) + (1 - y) * log(1 - y_hats)) + penalty
 }
 
+# this function is not a numeric approximation of the gradient but rather the direct analytical
+# functional form as derived in the mathematics above
 gradients <- function(betas, X, y, lambda) {
+	# note that `y_hats` are the predicted conditional probabilities having applied the sigmoid function
+	# on the design matrix and coefficients product NOT the predicted classes of heart disease presence
 	y_hats <- logistic_func(X %*% betas)
 	
 	# separate the logistic and penalty terms to compute gradients easier
@@ -97,7 +107,7 @@ design_matrix <- function(training) {
 	training %>%
 		select(-c(all_of("target"))) %>%
 		mutate(intercept = 1, .before = 1) %>%
-		mutate_at(vars(-intercept), scale) %>%
+		# mutate_at(vars(-intercept), scale) %>%
 		as.matrix
 }
 
@@ -180,6 +190,12 @@ gradient_descent <- function(training, predictor_names, learning_rate = 1e-6, to
 	)
 }
 ```
+
+Note that we scale every column in the input space (besides the intercept and target columns) in the `design_matrix` function. When we ran this gradient descent algorithm on unscaled values the logistic loss broke down after the first few iterations. A deeper examination revealed that the scale of the input values could range from 126–564 mg/dL (in the case of cholesterol) whereas our response is only binary. This size difference meant that $\boldsymbol{X\beta}$ would either produce extremely large or extremely small values which would become numerically unstable once the sigmoid function was applied $\sigma(\boldsymbol{X\beta})$.
+
+Consider if $\sigma(\boldsymbol{X\beta}) = 0$. Then, $\log(\sigma(\boldsymbol{X\beta})) = \log(0)$ which is undefined. Similarly, if $\sigma(\boldsymbol{X\beta}) = 1$ then, $\log(1-\sigma(\boldsymbol{X\beta})) = \log(0)$ which is also undefined. The output of sigmoid being exactly 0 or exactly 1 happens when the result of $\boldsymbol{X\beta}$ is numerically unstable. The `logistic_loss` method would save the current iteration's loss as `NaN` (not a number) in the losses history every iteration. The `coefficients` and `gradients` contained large vectors meaning the descent jumped around a lot and never converged on the local minima, only stopping due to the `max_iterations` being met.
+
+We scaled down the input space $\boldsymbol{X}$ (besides the intercept and target columns) to combat the numerical instability and our implementation works as expected.
 
 Before we run our logistic regression gradient descent implementation on our project data we want to assure that it works on simulated data.
 
@@ -456,7 +472,7 @@ log_model <- gradient_descent(
 	predictor_names = predictor_names,
 	learning_rate = 1e-2,
 	tolerance = 1e-5,
-	lambda = 0.4,
+	lambda = 1.7,
 	max_iterations = 10000
 )
 
