@@ -6,12 +6,7 @@ output: html_document
 
 **Candidate Numbers:**
 
-
-
 ## Outline/Contents
-
-
-
 
 ## Introduction
 
