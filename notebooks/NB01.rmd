@@ -70,7 +70,12 @@ Penn Medicine. (n.d.). *Coronary Artery Disease—Symptoms and Causes \| Penn Me
 We begin by requiring all necessary packages for this document to run. Any additional code reduces error output and helps the packages collaborate better.
 
 ```{r include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+# display code chunks
+knitr::opts_chunk$set(echo = TRUE) 
+
+# Clear environment of variables
+rm(list = ls())
+
 # General
 library(dplyr) # for filtering and sorting to be easier.
 library(rstudioapi) # to set the correct working directory
@@ -190,7 +195,7 @@ for (i in seq(2,n_preds,3)) {
 
 Note in the above that the distribution of most of the integer variables appear to have a discrete Gaussian/bell-curve type distribution within each class (with the exception of `trestbps` (resting blood pressure)).
 
-Moreover, the distributions for both integer and factor variables can be distinct conditional on each class. Where the distributions are conditionally Gaussian implies that both the mean and covariance for each class is different for each class, possibly motivating a QDA ***[please write out the acronym in full before using it]***.
+Moreover, the distributions for both integer and factor variables can be distinct conditional on each class. Where the distributions are conditionally Gaussian implies that both the mean and covariance for each class is different for each class, possibly motivating a Quadratic Discriminant Analysis (QDA).
 
 However, this is not precisely a normal (conditional on `y`), limiting the possible usefulness of QDA as a model fitting procedure.
 
@@ -198,7 +203,7 @@ Naive Bayes also appears a dud, as we often observe high correlations between th
 
 ### Model fitting and defining helper functions
 
-Knowing the class balances in our data will help explain our results and glean insight into the strengths and limitations of these data. As shown below, the class balances appear balanced.
+Knowing the class balances in our data will help explain our results and glean insight into the strengths and limitations of these data. As shown below, the class ratios appear balanced.
 
 ```{r}
 # We need the training set to be balanced, yet the validation set to have 68% balance.
@@ -556,7 +561,7 @@ stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitt
 }
 ```
 
-##### Set Up base formulas to plug into tuning grids
+##### Set up base formulas to plug into tuning grids
 
 ```{r}
 predictors <- names(Heart)[-1]
@@ -1793,7 +1798,7 @@ results <- data.frame(Predictor1 = character(),
                       MisclassificationRate = numeric()) # predictor combos stored
 ```
 
-### Predictive accuracy without interpretability
+### Predictively Accurate Model Without Interpretability: Classification Random Forest
 
 Earlier, we evaluated how a single tree model could result in a more-desirable trade-off of more false positive diagnoses in return for more true positive diagnoses compared to a logit, but **only** if either we had access to measurements that are less practical to gather from a patient, **or** we were willing to extend the depth and complexity of the tree, and hence, the time it would take for a medical professional to carry out a step-based "checklist" diagnostic process.
 
@@ -1830,6 +1835,19 @@ In particular, we argue that between our Cleveland sample and the wider US, we m
 
 We first create a tuning grid and for the random forest and then view the grid as well as its plot before analyzing the results.
 
+#### Pre-Adjustment
+
+We will eliminate the target and the target_numeric columns, since we no-longer need them.
+
+```{r}
+Heart_train <- Heart_train %>% dplyr::select(-target, -target_numeric)
+```
+
+
+#### Validate Best Tuning Parameters
+
+##### Set up a Grid of Tuning Parameters
+
 ```{r}
 tuning_grid_rf <- expand.grid(
   mtry = 1:6,
@@ -1840,6 +1858,7 @@ tuning_grid_rf <- expand.grid(
 tuning_grid_rf$formula = as.character(tuning_grid_rf$formula)
 tuning_grid_rf
 ```
+
 
 ```{r}
 # Run the grid validation function
