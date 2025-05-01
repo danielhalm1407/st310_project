@@ -1,67 +1,150 @@
 ---
-title: "st310 group project"
+title: "Diagnosis and Suggestive Treatment of Heart Disease Using Statistical Machine Learning"
 output:
   html_document:
     df_print: paged
 ---
 
-### Introduction
+**Author Candidate Numbers:** 49255
 
-***[I wasn't quite sure how we wanted to format this section and I know some portions may be repeated in other sections. I have also included the links used at the end of this section.]***
+# Introduction
 
-**Why is the heart important and how is heart disease defined?** The human heart persistently supplies blood throughout the body through the circulatory system so our organs can operate. However, the heart is still susceptible to injuries, which can be intensely damaging or even life-threatening. Excess fluid in body tissues, impaired thinking, and sudden weight changes are some indicators of a failing heart (American Heart Association, n.d). Understanding what causes and further exacerbates heart problems is crucial for patient health.
+In this project, we seek to use statistical machine learning techniques to analyse patient data in order to diagnose heart disease more effectively, as well as to propose suggestive treatment.
 
-There are several types of heart disease including strokes and transient ischaemic attacks, peripheral arterial disease, and cortic diseases; however, this study focuses on coronary artery disease (CAD), which is caused when the heart is strained by reduced or blocked oxygen-rich blood flow (NHS, 2017). A buildup of plaque (atherosclerosis) caused primarily by cholesterol and fats shrink the arteries over several years, eventually culminating in CAD through chest pain (anginas), heart attacks, and heart failure (Mayo Clinic, n.d.).
 
-**Where is our dataset from and what can we understand from it? What are its limitations?** A 1988 heart disease study from the University of California Irvine created a discriminant function model for predicting angiographic coronary disease in patients and compared the results to a Bayesian algorithm (Detrano et al., 1989). It is common for doctors and researchers to get an X-ray scan of a patient’s heart to detect the presence or absence of angiographic coronary disease by checking if the blood vessels are sufficiently open and unblocked (Mayo Clinic, n.d.). The result of an angiography is either heart disease is present or absent. This study collected patient results from angiographies and relevant health diagnostics to create their predictor model (Detrano et al., 1989).
+## Why Is the Heart Important and How Is Heart Disease Defined
 
-The original study by Detrano et al. (1989) aggregated patient data from the Cleveland Clinic (303 patients); Budapest, Hungary (425 patients); Zurich and Basel, Switzerland (143 patients); and the Veterans Administration Long Beach, California (200 patients). We were only able to make use to the Cleveland Clinic subset which had 1,025 observations.
+The human heart persistently supplies blood throughout the body through the circulatory system so our organs can operate. However, the heart is still susceptible to injuries, which can be intensely damaging or even life-threatening. Excess fluid in body tissues, impaired thinking, and sudden weight changes are some indicators of a failing heart (American Heart Association, n.d). Understanding what causes and further exacerbates heart problems is crucial for patient health.
+
+There are several types of heart disease including strokes and transient ischaemic attacks, peripheral arterial disease, and cortic diseases; however, this study focuses on **Coronary Artery Disease (CAD)**, which is caused when the heart is strained by reduced or blocked oxygen-rich blood flow (NHS, 2017). A buildup of plaque (atherosclerosis) caused primarily by cholesterol and fats shrink the arteries over several years, eventually culminating in CAD through chest pain (anginas), heart attacks, and heart failure (Mayo Clinic, n.d.).
+
+## Where Is Our Dataset From and What Can We Understand From It?
+
+A 1988 heart disease study from the University of California Irvine created a discriminant function model for predicting angiographic coronary disease in patients and compared the results to a Bayesian algorithm (Detrano et al., 1989). It is common for doctors and researchers to conduct an X-ray scan of a patient’s heart to detect the presence or absence of angiographic coronary disease by checking if the blood vessels are sufficiently open and unblocked (Mayo Clinic, n.d.). The result of an angiography is either heart disease is present or absent. This study collected patient results from angiographies and relevant health diagnostics to create their predictor model (Detrano et al., 1989).
+
+The original study by Detrano et al. (1989) aggregated patient data from the Cleveland Clinic (303 patients); Budapest, Hungary (425 patients); Zurich and Basel, Switzerland (143 patients); and the Veterans Administration Long Beach, California (200 patients). Due to restrictions of practicality and accessibility, we were only able to make use to the Cleveland Clinic subset which had 1,025 observations.
+
+### The Variables in Our Data
+
+**Our dataset has 7 categorical predictors:** 
+
+- **sex** – biological sex of the patient; 1 = male, 0 = female.  
+- **cp** – chest pain type; integer values 0 - 3 inclusive.  
+- **fbs** – fasting blood sugar; 1 if > 120 mg/dl, 0 if 1 if < 120 mg/dl.
+- **restecg** – resting electrocardiographic results (if extra load on the heart and presence of defects); integer values 0 - 2 inclusive.
+- **exang** – exercise-induced angina (heart pain while exercising); 1 = yes, 0 = no. 
+- **slope** – slope of the peak exercise ST segment  
+- **thal** – exercise thallium scintigraphic defects  
+
+**And 6 quantitative predictors:**
+
+- **age** – age of the patient; integer number of years  
+- **thalach** – maximum heart rate achieved; Beats per Minute (BPM)  
+- **ca** – number of major vessels (0–3) colored by fluoroscopy  
+- **oldpeak** – short-term depression induced by exercise relative to rest (indicating heart strain due to cholesterol); values 0 through 6.2.
+- **trestbps** – resting blood pressure; in mm Hg on admission to the hospital  
+- **chol** Serum cholesterol; in mg/dl
+
+
+
+## What are Our Dataset's limitations?
+
+### Generalisation
+
+In an ideal scenario, the findings of our project would be able to help patients around the globe. Even with the most well crafted machine learning approach, we can only be confident that we most appropriately capture the true underlying relationships within our data. However it cannot be said that these relationships or that this Data Generating Process (DGP) will hold beyond our data. 
+
+An ideal dataset would allow us to generalise to as large a population as possible - to all kinds of patients around the globe. However, as we discuss in the following sections, our dataset is limited in this regard.
+
+#### Generalisation Across Time
 
 Although these data were collected from a large study and helped researchers understand more in understanding coronary artery disease, there are some important limitations in the data to consider. These data were published in 1988 and, at the time of this report, important medical, political, social, and environmental advancements have been made in the past 37 years.
 
+#### Generalisation Across Gender
+
 Additionally, our dataset has a lot more men (713) then women (312) which could suggest that models fitted on these data will skew to accommodate male measurements better. This can be dangerous since women, as well as other vulnerable communities, are often overlooked in the medical community compared to white men (Beery, 1995; Cleveland Clinic, n.d.).
 
-Finally, these data were collected in one hospital in one state in one country, so the data likely represents that particular area well but maybe not the global population. A patient from humid continental Ohio is likely very different from a patient in the Mediterreanean climate of Algeria. If we strive to use our models to help patients around the globe, we need a more diverse dataset ranging across cultures, climates, nations, and peoples.
+#### Generalisation Across Geographies
 
-Besides these data collection concerns we also encountered issues with our dataset sourced from Kaggle, namely related to counterintuitive findings that raised concerns about the accuracy of certain attributes. For instance, the dataset suggests that experiencing chest pain during exercise correlates with a lower likelihood of heart disease, while showing no chest pain increases the risk of having heart disease, an interpretation that contradicts science (Hamada, 2025). This anomaly suggests that the `target` variable in our Kaggle dataset may have been reversed by the uploader — where a value of 0 actually represents a diseased heart and 1 indicates a healthy heart — rather than the original convention where 0 = healthy and 1 = diseased. The dataset also seems to contain multiple duplicate rows of information, potentially raising questions regarding the reliability of the source (Kalsi, 2024). This can be problematic as there are 723 rows of duplicated entries, which could introduce bias and subsequently negatively impact model performance (Rehman, 2023). Moreover, there are incorrect entries, perhaps reflective of "fat finger" errors when transcribing data from the original data source (Mahan, 2022). For example, the predictor that should only have entries 0-2, as can be seen in the screenshot of attribute information as provided by Kaggle, but there are 410 entries containing 3. Here, what 3 stands for can be questioned.
+Finally, these data were collected in one hospital in one state in one country, so the data likely represents that particular area well but maybe not the global population. A patient from humid continental Ohio is likely very different from a patient in the Mediterranean climate of Algeria. If we strive to use our models to help patients around the globe, we would benefit from a more diverse dataset that ranges across cultures, climates, nations, and peoples, and hence can generalise across these dimensions.
+
+### Questionable Data Pre-Cleaning at the Source
+
+Besides these data collection concerns we also encountered issues with our dataset sourced from Kaggle, namely related to counter-intuitive findings that raised concerns about the accuracy of certain attributes. 
+
+#### Reversed Outcome Variable
+
+For instance, the dataset suggests that experiencing chest pain during exercise correlates with a lower likelihood of heart disease, while showing no chest pain increases the risk of having heart disease, an interpretation that contradicts science (Hamada, 2025). 
+
+This anomaly suggests that **the `target` variable** in our Kaggle dataset **may have been reversed** at the source by those who uploaded it. This would mean that:
+
+- A value of 0 actually represents a diseased heart (CAD negative)
+- A value of 1 indicates a healthy heart (CAD positive)
+
+This contrasts with the convention (and as stated in the documentation/source page) where 0 = healthy and 1 = diseased. 
+
+#### Duplicate Values
+
+The dataset also seems to contain multiple duplicate rows of information, potentially raising questions regarding the reliability of the source (Kalsi, 2024). This can be problematic as there are 723 rows of duplicated entries, which could introduce bias and subsequently negatively impact model performance (Rehman, 2023). 
+
+#### Incorrect Entries
+
+Moreover, there are incorrect entries, perhaps reflective of "fat finger" errors when transcribing data from the original data source (Mahan, 2022). For example, the predictor, `thal` that should only have entries 0-2, as can be seen in the screenshot of attribute information as provided by Kaggle, but there are 410 entries containing 3. Here, what 3 stands for can be questioned.
 
 ![](images/clipboard-2963670802.png)
 
-Thus, while the coefficients discussed in our report remain valid in terms of magnitude and relative importance, their directional interpretation should be considered in reverse.
 
-**How is heart disease diagnosed in practice?** Doctors diagnose heart disease by a mix of patient-reported symptoms, common physical examinations, and different diagnostic tests based on their findings. Electrocardiograms (EKGs) are a non-invasive procedure that measure the heart muscle's electrical activity and is common for identifying irregular heartbeats (arrhythmias) and poor blood flow (ischemia) (British Heart Association, 2016). Physicians usually have patients do two EKG tests while they are resting and while exercising (called a stress test) to see how the heart performs under exertion to properly identify if they have heart disease and its severity. Another common non-invasive diagnostic tool is an echocardiogram which uses high-frequency sound waves, an ultrasound, to scan the heart and nearby blood vessels in real time (NHS, 2017). These "echos" help cardiologists get an overview of the structural health of a patient's heart which is vital when recovering from cardiovascular damage. The standard of care, however, is a coronary angiography where contrast dyes are injected through coronary arteries and X-rays identify blockages; unlike the aforementioned procedures, an angiography is invasive however provides more actionable value to the physians (NHS, 2017). These procedures are quick enough that patients can return home on the same day with little impact to their normal routine. Features present in the UCI Heart Disease dataset such as `slope`, `cp`, and `thalach` are measurements as a result of these medical diagnostic tests, whereas other features like `sex`, `age`, and `cholesterol` are recorded from physical examinations. Doctors then take these measurements are use their extensive domain knowledge to conclude if a patient has coronary artery disease or not. Their conclusions are supported by test results and by comparing medical measurements, such as cholesterol, with what is medically accepted to be a "safe" or "healthy" amount in someone of a similar sex, age, and other morphometric characteristics.
 
-**Why is heart disease "bad" and why is it such a prevalent issue?** Coronary artery disease is the leading cause of death across both genders in the United States and the second leading cause of death (behind Alzheimer's/dementia) across both genders in the United Kingdom (British Heart Foundation, 2025; CDC 2025). For context, 1 in 8 men and 1 in 14 women die from CAD for an average of one person dying every 8 minutes (British Heart Foundation, 2025). Since artery disease builds up over years it is a silent disease and the first symptoms are usually severe like chest pain or even a heart attack. Eventually CAD reduces a patient's quality of life because the strain on the heart limits their physical activity, causes fatigue, strong chest pain, and even long-term disability or hospitalization (Penn Medicine, n.d.).
+### Adjustments For these Limitations
 
-Although this disease is dangerous current medicine is advance enough to make it preventable through medications, interventions, and lifestyle changes. Therefore, it is essential for physicians to find ways to accurately diagnose the right patients with heart disease before it becomes too severe. Unfortunately, like mentioned before, the vulnerable members of society (people of color, women, LGBTQ+) are often overlooked and therefore underdiagnosed and undertreated, adding to these large fatality figures.
+To account for the limitations regarding **generalisation**, we form and attempt to justify certain arguments about the true data generating process and about human biology that would support the wider application of this research. We delve into more detail in our analysis sections.
 
-***[I've put my sources here until we have to merge them together with the existing references at the bottom. We're using APA style right?]***
+To account for the limitations regarding **data pre-cleaning at the source**, we simply emphasise that while the coefficients, partial dependencies discussed in our report remain valid in terms of magnitude and so their *relative importance* should be interpreted at face value, their *directional* interpretation should be considered in reverse.
 
-American Heart Association. (n.d.). *Heart Failure Signs and Symptoms*. Www.Heart.Org. Retrieved April 26, 2025, from <https://www.heart.org/en/health-topics/heart-failure/warning-signs-of-heart-failure>
 
-Beery, T. A. (1995). Gender bias in the diagnosis and treatment of coronary artery disease. *Heart & Lung*, *24*(6), 427–435. [https://doi.org/10.1016/S0147-9563(95)80020-4](https://doi.org/10.1016/S0147-9563(95)80020-4)
+## How is heart disease diagnosed in practice?
 
-British Heart Foundation. (2016, October 26). *What is an electrocardiogram (ECG)?* British Heart Foundation. <https://www.bhf.org.uk/informationsupport/heart-matters-magazine/medical/tests/electrocardiogram-ecg>
+Doctors diagnose heart disease by a mix of patient-reported symptoms, common physical examinations, and different diagnostic tests based on their findings. 
 
-British Heart Foundation. (2025, January). *UK Factsheet*. British Heart Foundation. <https://www.bhf.org.uk/-/media/files/for-professionals/research/heart-statistics/bhf-cvd-statistics-uk-factsheet.pdf?rev=81a8015761aa4ced8bc39d7045202be5&hash=9D78ACBF5EB80FA8A9BE28C90BFBE171>
 
-CDC. (2025, February 7). *Heart Disease Facts*. Heart Disease. <https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html>
+### Electrocardiograms (EKGs)
 
-Cleveland Clinic. (n.d.). *Heart Disease Risk: How Race and Ethnicity Play a Role*. Cleveland Clinic. Retrieved April 26, 2025, from <https://my.clevelandclinic.org/health/articles/23051-ethnicity-and-heart-disease>
+Electrocardiograms (EKGs) are a non-invasive procedure that measure the heart muscle's electrical activity and is common for identifying irregular heartbeats (arrhythmias) and poor blood flow (ischemia) (British Heart Association, 2016). 
 
-Detrano, R., Janosi, A., Steinbrunn, W., Pfisterer, M., Schmid, J.-J., Sandhu, S., Guppy, K. H., Lee, S., & Froelicher, V. (1989). International application of a new probability algorithm for the diagnosis of coronary artery disease. *The American Journal of Cardiology*, *64*(5), 304–310. [https://doi.org/10.1016/0002-9149(89)90524-9](https://doi.org/10.1016/0002-9149(89)90524-9)
+Physicians usually have patients do two EKG tests while they are resting and while exercising (called a stress test) to see how the heart performs under exertion to properly identify if they have heart disease and its severity. 
 
-Mayo Clinic. (n.d.-a). *Coronary angiogram—Mayo Clinic*. Retrieved April 26, 2025, from <https://www.mayoclinic.org/tests-procedures/coronary-angiogram/about/pac-20384904>
+### Echocardiograms
 
-Mayo Clinic. (n.d.-b). *Coronary artery disease—Symptoms and causes—Mayo Clinic*. Retrieved April 26, 2025, from <https://www.mayoclinic.org/diseases-conditions/coronary-artery-disease/symptoms-causes/syc-20350613>
+Another common non-invasive diagnostic tool is an echocardiogram which uses high-frequency sound waves, an ultrasound, to scan the heart and nearby blood vessels in real time (NHS, 2017). These "echos" help cardiologists get an overview of the structural health of a patient's heart which is vital when recovering from cardiovascular damage. 
 
-NHS. (2017a, October 17). *Cardiovascular disease*. Nhs.Uk. <https://www.nhs.uk/conditions/cardiovascular-disease/>
+### Coronary Angiography
 
-NHS. (2017b, October 18). *Echocardiogram*. Nhs.Uk. <https://www.nhs.uk/conditions/echocardiogram/>
+The standard of care, however, is a coronary angiography where contrast dyes are injected through coronary arteries and X-rays identify blockages; unlike the aforementioned procedures, an angiography is invasive however provides more actionable value to the physicians (NHS, 2017). 
 
-NHS. (2017c, October 19). *Cardiac catheterisation and coronary angiography*. Nhs.Uk. <https://www.nhs.uk/conditions/coronary-angiography/>
+These procedures are quick enough that patients can return home on the same day with little impact to their normal routine. 
 
-Penn Medicine. (n.d.). *Coronary Artery Disease—Symptoms and Causes \| Penn Medicine*. Penn Medicine. Retrieved April 26, 2025, from <https://www.pennmedicine.org/for-patients-and-visitors/patient-information/conditions-treated-a-to-z/coronary-artery-disease>
+### The Measures in our Data
+
+Features present in the UCI Heart Disease dataset such as `slope`, `cp`, and `thalach` are measurements as a result of these medical diagnostic tests, whereas other features like `sex`, `age`, and `cholesterol` are recorded from physical examinations. 
+
+Doctors then take these measurements are use their extensive domain knowledge to conclude if a patient has coronary artery disease or not. Their conclusions are supported by test results and by comparing medical measurements, such as cholesterol, with what is medically accepted to be a "safe" or "healthy" amount in someone of a similar sex, age, and other morphometric characteristics.
+
+
+## Why is heart disease "bad" and why is it such a prevalent issue?
+
+Coronary artery disease (CAD) is the leading cause of death across both genders in the United States (The source of our dataset) and the second leading cause of death (behind Alzheimer's/dementia) across both genders in the United Kingdom (British Heart Foundation, 2025; CDC 2025). 
+
+For context, 1 in 8 men and 1 in 14 women die from CAD for an average of one person dying every 8 minutes (British Heart Foundation, 2025). Since artery disease builds up over years it is a silent disease and the first symptoms are usually severe like chest pain or even a heart attack. 
+
+Eventually, CAD reduces a patient's quality of life because the strain on the heart limits their physical activity, causes fatigue, strong chest pain, and even long-term disability or hospitalization (Penn Medicine, n.d.).
+
+Although this disease is dangerous current medicine is advance enough to make it preventable through medications, interventions, and lifestyle changes. 
+
+Therefore, it is essential for physicians to find ways to accurately diagnose the right patients with heart disease before it becomes too severe, instead of simply relying on the patient to seek treatment, which only tends to happen once the first symptoms, which are already sever, start to show.
+
+Unfortunately, like mentioned before, the vulnerable members of society (people of color, women, LGBTQ+) are often overlooked and therefore under-diagnosed and undertreated, adding to these large fatality figures.
+
+
+
 
 ### Installing packages and environment setup
 
@@ -1993,27 +2076,59 @@ In particular, dietary changes play a crucial role in lowering cholesterol level
 
 ### References
 
-Patil, M. (2025, April 1). Variables impacting presence of heart disease. (A. Patil, Interviewer)
 
-Hamada, M. (2025, 16 April). Heart Disease Dataset - Discussion. Retrieved from Kaggle: <https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset/discussion/171669>
 
-NHS. (2025, April 21). How to lower your cholesterol. Retrieved from NHS: <https://www.nhs.uk/conditions/high-cholesterol/how-to-lower-your-cholesterol/>
 
-Cleveland Clinic. (2025, April 21). High Cholesterol Diseases. Retrieved from Cleveland Clinic: <https://my.clevelandclinic.org/health/articles/11918-cholesterol-high-cholesterol-diseases>.
+
+American Heart Association. (n.d.). *Heart Failure Signs and Symptoms*. Www.Heart.Org. Retrieved April 26, 2025, from <https://www.heart.org/en/health-topics/heart-failure/warning-signs-of-heart-failure>
+
+Beery, T. A. (1995). Gender bias in the diagnosis and treatment of coronary artery disease. *Heart & Lung*, *24*(6), 427–435. [https://doi.org/10.1016/S0147-9563(95)80020-4](https://doi.org/10.1016/S0147-9563(95)80020-4)
+
+British Heart Foundation. (2016, October 26). *What is an electrocardiogram (ECG)?* British Heart Foundation. <https://www.bhf.org.uk/informationsupport/heart-matters-magazine/medical/tests/electrocardiogram-ecg>
+
+British Heart Foundation. (2025, January). *UK Factsheet*. British Heart Foundation. <https://www.bhf.org.uk/-/media/files/for-professionals/research/heart-statistics/bhf-cvd-statistics-uk-factsheet.pdf?rev=81a8015761aa4ced8bc39d7045202be5&hash=9D78ACBF5EB80FA8A9BE28C90BFBE171>
+
 
 British Heart Foundation. (2025, March). Family History of Heart and Circulatory Diseases (BHF). Retrieved from British Heart Foundation: <https://www.google.com/search?q=have+the+same+factors+always+caused+heart+disease&newwindow=1&sca_esv=0472b01422b69ec8&sxsrf=AHTn8zr-98IX2GHtRBseo7vSVFNLi-K4ig%3A1744452819588&ei=0zz6Z5vRI7qDhbIPyoWukAo&ved=0ahUKEwjbho6VodKMAxW6QUEAHcqCC6IQ4dUDCBE&uact=5&>
 
 British Heart Foundation. (2025, April 12). Medicines for Heart Conditions - Treatments. Retrieved from British Heart Foundation: <http://bhf.org.uk/informationsupport/treatments/medication#>:\~:text=Holidays%20and%20travel-,Types%20of%20medicine%20for%20heart%20conditions,SGLT2%20inhibitors.
 
+CDC. (2025, February 7). *Heart Disease Facts*. Heart Disease. <https://www.cdc.gov/heart-disease/data-research/facts-stats/index.html>
+
+Cleveland Clinic. (n.d.). *Heart Disease Risk: How Race and Ethnicity Play a Role*. Cleveland Clinic. Retrieved April 26, 2025, from <https://my.clevelandclinic.org/health/articles/23051-ethnicity-and-heart-disease>
+
+Cleveland Clinic. (2025, April 21). High Cholesterol Diseases. Retrieved from Cleveland Clinic: <https://my.clevelandclinic.org/health/articles/11918-cholesterol-high-cholesterol-diseases>.
+
+Detrano, R., Janosi, A., Steinbrunn, W., Pfisterer, M., Schmid, J.-J., Sandhu, S., Guppy, K. H., Lee, S., & Froelicher, V. (1989). International application of a new probability algorithm for the diagnosis of coronary artery disease. *The American Journal of Cardiology*, *64*(5), 304–310. [https://doi.org/10.1016/0002-9149(89)90524-9](https://doi.org/10.1016/0002-9149(89)90524-9)
+
+Hamada, M. (2025, 16 April). Heart Disease Dataset - Discussion. Retrieved from Kaggle: <https://www.kaggle.com/datasets/johnsmith88/heart-disease-dataset/discussion/171669>
+
 James, G., Witten, D., Hastie, T., & Tibshirani, R. (2023). An Introduction to Statistical Learning with Applications in R.
+
+Mayo Clinic. (n.d.-a). *Coronary angiogram—Mayo Clinic*. Retrieved April 26, 2025, from <https://www.mayoclinic.org/tests-procedures/coronary-angiogram/about/pac-20384904>
+
+Mayo Clinic. (n.d.-b). *Coronary artery disease—Symptoms and causes—Mayo Clinic*. Retrieved April 26, 2025, from <https://www.mayoclinic.org/diseases-conditions/coronary-artery-disease/symptoms-causes/syc-20350613>
 
 Mayo Clinic. (2025, March). Heart disease - Diagnosis and treatment - Mayo Clinic. Retrieved from Mayo Clinic: <https://www.mayoclinic.org/diseases-conditions/heart-disease/diagnosis-treatment/drc-20353124>
 
 National Institutes of Health. (2025, March). Bioengineering and the Cardiovascular System - PMC. Retrieved from NIH.org: <https://www.google.com/search?q=have+the+biological+fundamentals+of+the+human+body+with+respect+to+heart+disease+changed+in+the+last+50+years&newwindow=1&sca_esv=0472b01422b69ec8&sxsrf=AHTn8zpnxWNSxCZU6jBsjJANayje5PMEag%3A1744457102261&ei=jk36Z8baD62ahbIP>
 
+NHS. (2017a, October 17). *Cardiovascular disease*. Nhs.Uk. <https://www.nhs.uk/conditions/cardiovascular-disease/>
+
+NHS. (2017b, October 18). *Echocardiogram*. Nhs.Uk. <https://www.nhs.uk/conditions/echocardiogram/>
+
+NHS. (2017c, October 19). *Cardiac catheterisation and coronary angiography*. Nhs.Uk. <https://www.nhs.uk/conditions/coronary-angiography/>
+
 NHS. (2025, March). Coronary Heart Disease - Causes. Retrieved from NHS: <https://www.nhs.uk/conditions/coronary-heart-disease/causes/#>:\~:text=Coronary%20heart%20disease%20(CHD)%20is,have%20diabetes
 
+NHS. (2025, April 21). How to lower your cholesterol. Retrieved from NHS: <https://www.nhs.uk/conditions/high-cholesterol/how-to-lower-your-cholesterol/>
+
 NHS. (2025, April). Coronary heart disease - Treatment. Retrieved from NHS: <https://www.mayoclinic.org/diseases-conditions/heart-disease/diagnosis-treatment/drc-20353124>
+
+
+Patil, M. (2025, April 1). Variables impacting presence of heart disease. (A. Patil, Interviewer)
+
+Penn Medicine. (n.d.). *Coronary Artery Disease—Symptoms and Causes \| Penn Medicine*. Penn Medicine. Retrieved April 26, 2025, from <https://www.pennmedicine.org/for-patients-and-visitors/patient-information/conditions-treated-a-to-z/coronary-artery-disease>
 
 ### Annex
 
