@@ -143,12 +143,27 @@ Therefore, it is essential for physicians to find ways to accurately diagnose th
 
 Unfortunately, like mentioned before, the vulnerable members of society (people of color, women, LGBTQ+) are often overlooked and therefore under-diagnosed and undertreated, adding to these large fatality figures.
 
+A key way to support this is to support diagnoses that can be made with **as few measurements as possible**, and measurements that are as **easy to collect as possible**. Such diagnoses can be carried out in as little time with as few resources (staff, equipment, and hence funding) and with as little invasive-ness as possible. This may encourage *earlier* diagnoses that help patients receive treatment/treat themselves long *before* symtoms materialise.
+
+**More accurate** diagnoses also give medical professionals more confidence to carry out more serious treatments despite their possible consequences, since the probability of administering a potentially harmful treatment when it may not even be so necessary is lower. This makes it more likely that those suffering the most severe forms of heart disease can receive the treatments necessary to improve their condition.
+
+Moroever, encouraging treatments that are as simple and practical as possible, while minimising possible patient harm, may reduce strain on limited treatment resources and enable more patients to improve their health and prevent heart disease instead of relying on typically more expensive, reactive treatment (ibid).
+
+## Our Objectives
+
+Therefore, we lay out the following key objectives:
+
+1.  To accurately predict the likelihood of an individual developing heart disease with as few and as practical measures as possible. Specifically, we wish to identify those at higher risk and develop a model that could be used to assist in diagnosis as far beyond our initial sample as reasonably possible.
+
+2.  To identify practical, non-surgical treatment methodologies that can help reduce heart disease risk.
 
 
 
-### Installing packages and environment setup
 
-#### Packages installation and dataset retrieval
+# Setup
+
+
+## Packages Installation
 
 We begin by requiring all necessary packages for this document to run. Any additional code reduces error output and helps the packages collaborate better.
 
@@ -171,7 +186,7 @@ library(randomForest) # for random forest fitting
 library(ranger) # for random forest fitting
 library(MASS) # for QDA and LDA
 library(e1071) # to fit a naive bayes GMC.
-library(glmnet)
+library(glmnet) # to run lasso
 library(leaps) # for best subset selection
 
 # Plotting/ Visualisation
@@ -192,6 +207,7 @@ library(rsample) # to allow parameter tuning using tidymodels
 # Resolve package conflicts (basically avoid having to us dplyr::select all the time)
 library(conflicted)
 
+# most of the below are needed due to the process behind generating partial dependence plots (PDPs)
 conflict_prefer("select", "dplyr")
 conflicts_prefer(dplyr::filter)
 conflicts_prefer(yardstick::accuracy)
@@ -207,6 +223,8 @@ conflicts_prefer(randomForest::margin)
 conflicts_prefer(randomForest::combine)
 ```
 
+## Environment Set-Up and Dataset Retrieval
+
 We also define the current environment so that this document is self-sufficient in retrieving the necessary files, like the dataset, independently regardless of which machine it runs on.
 
 ```{r}
@@ -219,9 +237,11 @@ predictions_path <- paste0(getwd(), "/../predictions/")
 Heart <- read.csv(paste0(data_path, "Heart.csv"))
 ```
 
-#### Global data preprocessing to ensure all models are fitted on reliable data
+## Data Cleaning
 
-To ensure that the data will be read by R correctly we do some manual preprocessing which involves renaming the response column, reording columns, and recoding factor variables. A preview of the first 6 lines of the data are shown below.
+### Global Data Pre-processing to Ensure All Models Are Fitted on Reliable Data
+
+To ensure that the data will be read by R correctly, we do some manual pre-processing which involves renaming the response column, re-ording columns, and re-coding factor variables. A preview of the first 6 lines of the data are shown below.
 
 ```{r}
 # Copy the `target` column to `y` (need unfactored `target` for gradient descent)
@@ -240,10 +260,11 @@ Heart <- Heart %>% mutate(sex_factor = recode(sex, "0" = "Female", "1" = "Male")
 # Get number of predictors/features
 n_preds <- sum(names(Heart) != "y")
 
+# Inspecting the top of the dataframe
 head(Heart)
 ```
 
-#### Partitioning the data into training and testing subsets for future fitting and predicting
+### Partitioning the Data Into Training and Testing Subsets for Future Fitting and Predicting
 
 Finally, we split the dataset into `training` and `testing` subsets by using `tidymodel`'s `initial_split` method, which partitions the data such that 70% of the observations are allocated to the training set and the remaining 30% are allocated to the testing set.
 
@@ -255,16 +276,15 @@ Heart_test <- Heart_split %>% testing()
 Heart_valid <- Heart_split %>% testing()
 ```
 
-### Exploratory data analysis
+## Exploratory Data Analysis
 
-We start by taking a look at the joint distribution of predictors against each other and the outcome, `y`.
+We start by taking a look at the joint distribution of predictors against each other and the outcome, `y`. This is done to potentially motivate certain procedures that are more tailored to strike a balance between bias and variance given the distributional properties of the data.
 
-```{r}
-Heart[,1:5] |>
-  ggpairs(progress = F)
-```
+
 
 ```{r}
+# Sequentially create scatter, line and box plots as well as correlations between different pairs of variables
+# this makes separate plots for each set of 3 predictors and the outcome (hence 4 sets of variables in each plot)
 for (i in seq(2,n_preds,3)) {
   plot <- ggpairs(
     Heart[, c(i:(min(n_preds,i + 2)), 1)], 
@@ -278,13 +298,17 @@ for (i in seq(2,n_preds,3)) {
 
 Note in the above that the distribution of most of the integer variables appear to have a discrete Gaussian/bell-curve type distribution within each class (with the exception of `trestbps` (resting blood pressure)).
 
-Moreover, the distributions for both integer and factor variables can be distinct conditional on each class. Where the distributions are conditionally Gaussian implies that both the mean and covariance for each class is different for each class, possibly motivating a Quadratic Discriminant Analysis (QDA).
+Moreover, the distributions for both integer and factor variables can be distinct conditional on each class. Where the distributions are conditionally Gaussian implies that both the mean and covariance for each class is different for each class, possibly motivating a Quadratic Discriminant Analysis (QDA) (as opposed to Linear Discriminant Analysis (LDA), which assumes a covariance matrix that is constant for each class).
 
-However, this is not precisely a normal (conditional on `y`), limiting the possible usefulness of QDA as a model fitting procedure.
+However, this is not precisely a normal (conditional on `y`) for a number of variables, especially given the large number of categorical predictors, limiting the possible usefulness of QDA as a model fitting procedure.
 
 Naive Bayes also appears a dud, as we often observe high correlations between the features/predictors across both classes, and naturally this is likely to extend to high correlations within class as well. Therefore, we cannot make the necessary argument that the predictors are independent within a given class.
 
-### Model fitting and defining helper functions
+As a result, we may be limited to other model-fitting procedures that must be carefully parameter-tuned in order to avoid over-fitting.
+
+
+### Examining the Class Balance
+
 
 Knowing the class balances in our data will help explain our results and glean insight into the strengths and limitations of these data. As shown below, the class ratios appear balanced.
 
@@ -299,8 +323,13 @@ outcome_counts_fold
 ```{r}
 const_yhat_success
 ```
+The fact that classes are generally balanced means that, all else equal, it might not make as much sense to tailor the conditional probability threshold beyond which we assign a patient to be predicted a certain class. Nonetheless, we do experiment with this later.
 
-#### Creating a model types and "best" specifications data frame
+
+## Model fitting and defining helper functions
+
+
+### Creating a model types and "best" specifications data frame
 
 For each model fitting procedure, we create a grid of tuning parameters and model inputs (including a choice of predictors and functional forms where applicable).
 
@@ -310,11 +339,11 @@ In our classification setting, this is the misclassification rate.
 
 We then store this specification (all the inputs we need to run this fit) and its accuracy in this aggregated table, repeating this for all model fitting procedures.
 
-In other words, each row corresponds to a model fitting procedure (e.g. GAM, tree, OLS) ***[we should write out in full what acronyms are before using them as good practice]*** with each column giving some parameter or information about the specification that achieved the best accuracy given that model procedure.
+In other words, each row corresponds to a model fitting procedure (e.g. logistic regression, classification tree), with each column giving some parameter or information about the specification that achieved the best accuracy given that model procedure.
 
-This allows us to create the table above to store any number of tuning parameters and use any form of accuracy measure, in this case, we use the misclassification (misclass) rate, and 3 tuning parameters.
+This allows us to create the table above to store any number of tuning parameters and use any form of accuracy measure. Since we are working with a classification problem, we use the misclassification rate (or misclass rate) and allow for up to 3 tuning parameters.
 
-In this table, sub-models and functional forms and combinations of predictors are also counted as tuning parameters, just for maintainability, although this is not strictly true.
+In this table, sub-models and functional forms and combinations of predictors are also counted as tuning parameters, just for maintainability, even though this is not strictly true.
 
 ```{r}
 gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
@@ -339,29 +368,31 @@ gen_models_df <- function(len=10, accuracy_measures = c("min_mse")) {
 Heart_models <- gen_models_df(accuracy_measures = c("misclass_rate"))
 ```
 
-#### Functions for model tuning
+### Functions for Model Tuning
 
 We define a set of functions to select the "best" tuning parameters for different models, often defined as the simplest model past a threshold level of prediction accuracy.
 
-##### Define a function that finds prediction accuracy
+#### Define a Function That Finds Prediction Accuracy
 
-This takes predictions as inputs and calculates the validation misclassification rate (or, optionally, MSE) accordingly.
+This takes predictions as inputs and calculates the validation misclassification rate, or, optionally, Mean Squared Error (MSE) accordingly.
 
 ```{r}
 calculate_error <- function(predictions, true_values, classify) {
   if (classify) {
-    return(mean(predictions != (as.numeric(true_values) - 1)))
+    return(mean(predictions != (as.numeric(true_values) - 1))) # for classification, counts the proportion of times the predicted class is different from the true class, hence 'mis-classified'
   } else {
-    return(mean((predictions - true_values)^2))
+    return(mean((predictions - true_values)^2)) # for continuous, takes the mean squared error (MSE)
   }
 }
 ```
 
-##### Define a function that calculates validation set accuracy for a grid of tuning parameters
+#### Functions to Calculate Validation Set Accuracy for a Grid of Tuning Parameters
 
 We use `tidymodels` syntax for efficiency and modularity with different fitting procedures.
 
-Uses a helper function to get the model specification (including the fitting procedure and the engine) into `tidyverse`'s desired format first.
+This function *itself* uses a separate, helper function to get the model specification (including the fitting procedure and the engine) into `tidyverse`'s desired format first.
+
+##### Define a Function that Retreives the Model Specification
 
 ```{r}
 # Function to get model specification
@@ -398,6 +429,8 @@ get_model_spec <- function(model_fitting_procedure, engine, tuning_params) {
   return(model_spec_updated)
 }
 ```
+
+##### Define a Function That Calculates Validation Set Accuracy for a Grid of Tuning Parameters
 
 ```{r}
 # Function to get the accuracy for each model specification corresponding to the tuning parameters
@@ -460,17 +493,21 @@ grid_validate_tidy <- function(train_data, valid_data, tuning_grid, model_fittin
 }
 ```
 
-##### Define a function that extracts the predictors from a formula column in a tuning grid
+#### Formulas for Mixed Subset Selection
+
+##### Define a Function That Extracts the Predictors From a Formula Column in a Tuning Grid
+
+This is used to support mixed stepwise subset selection, where we need to iteratively be able to extract current predictors, add or remove some subset of them, and then re-fit the model.
 
 ```{r}
 extract_predictors <- function(formula) {
-  # Remove "y ~" from the formula
+  # Remove "y ~" from the formula, since we add it back later
   formula_rhs <- gsub("y ~", "", formula)
   
-  # Trim spaces
+  # trim spaces 
   formula_rhs <- trimws(formula_rhs)
   
-  # Split into vector if not empty, otherwise return empty vector
+  # Split into vector (each element with one of the predictors) if not empty, otherwise return an empty vector
   if (formula_rhs == "" || formula_rhs == "y ~") {
     return(character(0))  # Return empty vector if no predictors in the formula
   } else {
@@ -479,7 +516,7 @@ extract_predictors <- function(formula) {
 }
 ```
 
-##### Create a function that conducts one forward or one backward stepwise iteration
+##### Create a Function That Conducts One Forward or One Backward Stepwise Iteration
 
 ```{r}
 fwd_bckwd_step <- function(train_data, valid_data, tuning_params, model_fitting_procedure, engine, direction = "fwd") {
@@ -488,7 +525,8 @@ fwd_bckwd_step <- function(train_data, valid_data, tuning_params, model_fitting_
   predictors <- setdiff(names(train_data), "y")
   
   # Split current_predictors string into individual variable names, if any
-  current_predictors <- extract_predictors(tuning_params$formula)  # Fixed here, using extract_predictors function directly
+  current_predictors <- extract_predictors(tuning_params$formula)  
+  
   # Find remaining predictors not in the current predictor set
   predictors_left <- setdiff(predictors, current_predictors)
   
@@ -514,13 +552,13 @@ fwd_bckwd_step <- function(train_data, valid_data, tuning_params, model_fitting_
       paste("y ~", paste(remaining_vars, collapse = " + "))
     })
   }
-  # Expand tuning_params to match the number of new formulas
+  # Expand tuning_params to match the number of new formulas, each of which we will see if provides a better fit
   tuning_params <- tuning_params %>% select(-formula)
   tuning_rows <- nrow(tuning_params)
   predictor_rows <- nrow(predictor_combos)
   fwd_tuning_grid <- tuning_params %>% slice(rep(1:tuning_rows, each = predictor_rows))
 
-  # Assign new formulas to the expanded tuning grid
+  # Assign new formulas to the expanded tuning grid (it is called fwd tuning grid, but might also happen to be a backward grid)
   fwd_tuning_grid$formula <- as.character(predictor_combos$formula)
 
   # Calculate the accuracy for each specification in the grid
@@ -528,24 +566,24 @@ fwd_bckwd_step <- function(train_data, valid_data, tuning_params, model_fitting_
   accuracy_df <- valid_output$accuracy_df
   preds <- valid_output$preds
   
-  # Extract the best model (the one with the lowest misclassification rate)
+  # Extract the best model (the one with the lowest validation misclassification rate)
   best_index <- which.min(accuracy_df$misclass_rate)
 
   best_model <- accuracy_df[best_index,]
   best_model <- best_model[1,]
   
-  # Add a column that says that the predictions belong to the best model
+  # Add a column that indicates that the predictions belong to the best model (so these can be pulled out later)
   preds <- preds %>% mutate(best = ifelse(spec_no == best_index, 1, 0))
   
   # Get the final new formula with the new predictors from the best model
-  new_formula <- best_model$formula  # Using extract_predictors to split the formula
+  new_formula <- best_model$formula  
   
   # Output the best model and the new set of predictors
   return(list(accuracy_df = accuracy_df, preds=preds, best_model = best_model, new_formula = new_formula, n = n))
 }
 ```
 
-##### Create a function that conducts mixed stepwise subset selection
+##### Create a Function That Conducts Mixed Stepwise Subset Selection
 
 ```{r}
 stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitting_procedure, engine, predictors_lim = 4, fwd_steps = 3, bkwd_steps = 2) {
@@ -597,7 +635,7 @@ stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitt
     }
     
     # Backward steps (after forward steps, perform bkwd_steps backward)
-    # Only start if can make at least the min number of backward steps
+    # Only start if can make at least the min number of backward steps - i.e., if we have already taken enough forward steps
     if ( n >= bkwd_steps+1) {
       for (i in 1:bkwd_steps) {
         if (n -1 >= 1) {
@@ -644,7 +682,7 @@ stepwise_selection <- function(train_data, valid_data, tuning_params, model_fitt
 }
 ```
 
-##### Set up base formulas to plug into tuning grids
+##### Set Up Base Formulas to Plug Into Tuning Grids
 
 ```{r}
 predictors <- names(Heart)[-1]
@@ -656,7 +694,7 @@ selected_predictors = c(paste(as.character(predictors[1]), collapse = " + "),
 formulas <- paste("y ~", selected_predictors)
 ```
 
-##### Create a function that can plot how our validation or cross-validation error measures compare based on combinations of tuning parameters
+#### Define a Function That Can Plot How Our Validation or Cross-Validation Error Measures Compare Based on Combinations of Tuning Parameters
 
 This takes a specification grid output from `grid_validate_tidy()` above as an input, plotting how validation accuracy/error changes based on up to 3 dimensions.
 
@@ -713,9 +751,9 @@ plot_grid <- function(grid, val_measure = "v_mse", tp1 = "n_preds_used", tp2 = N
 }
 ```
 
-##### Create a function that retrieves the best specification
+####Create a Function That Retrieves the Best Specification
 
-In other words, this retreives the corresponding sub-model, regressors, functional forms and tuning parameters that give us the best validation set accuracy from a grid (like that output from `grid_validate()`) where each row is some different specification.
+In other words, this retrieves the corresponding sub-model, regressors, functional forms and tuning parameters that give us the best validation set accuracy from a grid (like that output from `grid_validate()`) where each row is some different specification.
 
 ```{r}
 get_best_spec <- function(grid_df, grid_validation) {
@@ -730,9 +768,11 @@ get_best_spec <- function(grid_df, grid_validation) {
 }
 ```
 
-##### Create a function that visually compares predicted values to validation values
+##### Create a Function That Visually Compares Predicted Values to Validation Values
 
-This is set up to work both for continuous outcomes (`preds` against `valids` scatter plot) and a categorical outcome (confusion matrix).
+This is set up to work both for continuous outcomes (`preds` against `valids` scatter plot) and a categorical outcome (confusion matrix). In our case, we use the categorical functions.
+
+This therefore first prints out a misclassification rate and then the confusion matrix to back it for a given set of predictions.
 
 ```{r}
 graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
@@ -752,29 +792,37 @@ graph_preds <- function(preds, valids, cm=T, scatter=F, classify=T) {
     abline(0, 1)
   }
   error_col <- paste0(ifelse(classify, "misclass_rate", "mse"))
-  print(paste(error_col, ":", calculate_error(preds, valids, classify)))
+  print(paste(error_col, ":", calculate_error(preds, valids, classify))) # this last line displays the error rate as well, just as a reference.
 }
 ```
 
-### Baseline model
 
-#### Determining the most influential quantitative and qualitative predictors
+# Analysis
 
-To determine what an ideal baseline model looks like, we first tried to identify the most influential quantitative and qualitative predictors.
+
+## Baseline Model: Sparse Ordinal Logistic Regression
+
+### Determining the most Influential Quantitative and Qualitative Predictors
+
+To determine what an ideal baseline model looks like, we first tried to identify the most influential quantitative and qualitative predictors, so as to limit the model to only make predictions on a very limited and hence simple and interpretable set of predictors.
 
 For our quantitative predictors such as `age`, `thalach` and `oldpeak`, we calculated the correlation of the predictors with the target. The correlations are then rearranged from most to least influential — the most influential numeric variable was identified as `oldpeak`.
 
-For our qualitative predictors such as `sex_factor`, `cp` and `thal`, we decided to look at a logistic regression model to assess the significance of our categorical predictors. The logit model is:
+For our qualitative predictors such as `sex_factor`, `cp` and `thal`, we decided to look at a logistic regression model to assess the significance and effect of our categorical predictors. 
+
+The logit model is:
 
 $$
 \log\left(\frac{p}{1-p}\right) = \beta_0 + \beta_1 X_1 + \beta_2 X_2 + \dots + \beta_n X_n
 $$
 
-such that $p$ reflects the probability of the target being 1, $\beta_0$ is the intercept value and $\beta_1, \beta_2, \dots, \beta_p$ are the coefficients for their respective predictors $X_1, X_2, \dots, X_p$
+such that $p$ reflects the probability of the target being 1, **conditional** on the values of the predictors, $\beta_0$ is the intercept value and $\beta_1, \beta_2, \dots, \beta_p$ are the coefficients for their respective predictors $X_1, X_2, \dots, X_p$
 
 We then visualise the coefficients of the categorical variables, derived from our logistic model, via a plot.
 
-The $p$-values derived from the model summary are then sorted from most significant to least significant — the most influential categorical variable was identified as `cp`. These $p$-values are indicative of statistical significance of each predictor.
+The $p$-values derived from the model summary are then sorted from most significant to least significant — the most influential categorical variable was identified as `cp`, or chest-pain type. This makes sense in the context of our earlier research, since patients tend only to seek treatment once the worst symptoms (such as physical chest pain) materialise, which is often long *after* CAD (or other forms of heart disease) have set in.
+
+These $p$-values are indicative of statistical significance of each predictor.
 
 ```{r}
 # Most influential quantitative variable determined via looking at correlations
@@ -801,10 +849,10 @@ estimates <- coef_plot[, 1]
 standarderror <- coef_plot[, 2] 
 
 barplot <- barplot(coef_plot[, 1], main = "Coefficients of Logistic Model", las = 2, ylim = range(estimates + 2*standarderror, estimates - 2*standarderror), ylab = "Estimate")
-arrows(barplot, estimates - 2*standarderror, barplot, estimates + 2*standarderror, angle = 90, code = 3, length = 0.05) # error bars for + or - 2SE
+arrows(barplot, estimates - 2*standarderror, barplot, estimates + 2*standarderror, angle = 90, code = 3, length = 0.05) # error bars for + or - 2SEs
 
 # Most significant qualitative variable
-sort(summary(glm_categoricals)$coefficients[, 4]) # most significant is cp
+sort(summary(glm_categoricals)$coefficients[, 4]) 
 ```
 
 #### Final baseline model
@@ -818,20 +866,24 @@ $$
 The summary function highlights that both predictors are highly significant when compared to our target.
 
 ```{r}
-## Baseline model - taking the most highly correlated numerical predictor and the most significant categorical predictor
+## The fit store of the Baseline model - taking the most highly correlated numerical predictor and the most significant categorical predictor
 glm1 <- glm(target ~ cp + oldpeak, data = Heart_train, family = binomial)
 summary(glm1)
 ```
 
-### Gradient-descent based model
 
-#### Introducing the problem context and key notation
+
+
+
+## Gradient-Descent Based Model: Ordinal Logistical Regression with Ridge Regularisation
+
+### Introducing the Problem Context and Key Notation
 
 We implemented a simple gradient descent algorithm to classify if patients have a presence of coronary artery disease or not given $p \in \mathbb{N}$ medical characteristics $\boldsymbol{\theta} = (\theta_{1}, \dots, \theta_{p})^\mathsf{T}$.
 
 Consider a regularized logistic regression model with the parameters $\boldsymbol{\beta}$ being a $(p+1) \times 1$ column vector containing our medical characteristics of interest ($\boldsymbol{\theta}$) and an added intercept coefficient. We are given $N \in \mathbb{Z}$ observations. Let $\boldsymbol{X} = (x_{1}, \dots, x_{N})$ be the design matrix of size $N \times (p+1)$ for the input space where each $\boldsymbol{x_{i}}$ is a row vector of dimension $1 \times (p+1)$ denoting the $i$-th row of observations. Finally, suppose $\boldsymbol{y} = (y_{1}, ..., y_{N})^\mathsf{T}$ be the target classes column vector of dimension $N \times 1$ representing if each observation has CAD or not.
 
-#### Feature selection via best subsets
+### Feature Selection via Best (Forward) Subsets
 
 We first need to select our medical features of interest. Because we want this model to be relatively explainable, and figuring out how to include interactive terms is beyond the scope of this project, we want a smaller input space. We decide to use forward stepwise selection as shown below.
 
@@ -845,10 +897,10 @@ dataset_cleaned <- Heart_split %>% training() %>% select(-all_of(c("y", "sex_fac
 subset_selection <- regsubsets(target ~ ., data = dataset_cleaned)
 summary(subset_selection)
 
-predictor_names <- c("exang", "oldpeak", "ca", "cp")
+predictor_names <- c("exang", "oldpeak", "ca", "cp") # extract the 'best' 4 predictors to a new variable
 ```
 
-We see that the best 4-predictor model includes `exang`, `oldpeak`, and `ca` which are exercised induced angina, ST depression induced by angina, and the number of major vessels colored by fluoroscopy, respectively. We analyze the correlations between these predictors and see that there are some moderately positive correlation happening as shown in the correlation heatmap below. The exception is `cp` which is slightly negatively correlated. This correlation suggests some multicollinearity is happening.
+We see that the best 4-predictor model includes `exang`, `oldpeak`, and `ca` which are exercised induced angina, ST depression induced by angina, and the number of major vessels colored by fluoroscopy, respectively. We analyze the correlations between these predictors and see that there are some moderately positive correlation happening as shown in the correlation heatmap below. The exception is `cp` which is slightly negatively correlated. This correlation suggests some multicollinearity is happening. As a result, the predictive contribution of any one of these variables may instead be confounded by the effect of another variable that it is correlated/tends to coincide with.
 
 ```{r}
 correlation_matrix <- cor(Heart %>% select(all_of(predictor_names)))
@@ -862,9 +914,11 @@ training <- Heart_train %>% select(all_of(predictor_names), "target")
 testing <- Heart_valid %>% select(all_of(predictor_names), "target")
 ```
 
-#### Deriving the logistic loss function and its gradient analytically
 
-Since we are doing logistic regression, our model is given by the following form
+
+### Deriving the Logistic Loss Function and Its Gradient Analytically
+
+Since we are doing logistic regression, our model (for predicting the conditional log odds of a positive diagnosis of CAD, denoted $Y$, is given by the following form
 
 $$
 Y = \beta_{0} + \beta_{1}X_{1} + \beta_{2}X_{2} + \dots + \beta_{p}X_{p} + \epsilon,
@@ -876,7 +930,7 @@ $$
 \hat{Y} = \beta_{0} + \beta_{1}(\text{exang}) + \beta_{2}(\text{oldpeak}) + \beta_{3}(\text{ca}) + \beta_{4}(\text{cp}) + \epsilon,
 $$
 
-We seek to find the optimal coefficients $\boldsymbol{\beta} = (\beta_{0}, \dots, \beta_{p})^\mathsf{T}$ that minimizes the negative log-likelihoods with some added positive penalty term $\lambda \in \mathbb{R}$. We decided to go for an L2 (ridge) regularization because of the following reasons:
+We seek to find the optimal coefficients $\boldsymbol{\beta} = (\beta_{0}, \dots, \beta_{p})^\mathsf{T}$ that minimizes the negative log-likelihoods with some added positive penalty term $\lambda \in \mathbb{R}$. We decided to augment the standard logit model with an L2 (ridge) regularization because of the following reasons:
 
 -   We are building a simpler model with fewer predictors and so we ideally do not want them to shrink to zero, which would be the case if we used L1 lasso regularization;
 
@@ -919,7 +973,7 @@ $$
 
 (Notice we distributed the negative in front of the summation through and factored out the $x_{i}$ found in both terms). We define these functions in R for later in the implementation.
 
-#### Defining the necessary functions to implement gradient descent
+### Defining the Necessary Functions to Implement Gradient Descent
 
 We separate out different components of the gradient descent algorithm in smaller, easier to understand functions. This helps to make the code more readable and easier to debug. We first define the methods `logistic_func`, `logistic_loss`, and `gradients` based on the mathematical derivations found above.
 
@@ -955,7 +1009,11 @@ gradients <- function(betas, X, y, lambda) {
 }
 ```
 
-The baseline helper functions are now defined to be used later on. Our implementation requires that the input space be a matrix $\boldsymbol{X}$ of a specific format which `design_matrix` forces data to conform to. The `update_step_size` uses the Barzilai-Borwein (BB) method for updating how big the gradient should move (its step size) each iteration of the descent based on the two previous estimated coefficients and gradients. We settled on using BB to help the model more dynamically converge without setting an arbitrary learning rate. Finally, the `gradient_descent` function uses all of the previously defined methods to run logistic gradient descent given some tuning parameters (such as learning rate and lambda) and returns histories of the coefficients, gradients, losses, step sizes, and predictor names.
+The baseline helper functions are now defined to be used later on. Our implementation requires that the input space be a matrix $\boldsymbol{X}$ of a specific format which `design_matrix` forces data to conform to. 
+
+The `update_step_size` uses the Barzilai-Borwein (BB) method for updating how big the gradient should move (its step size) each iteration of the descent based on the two previous estimated coefficients and gradients. We settled on using BB to help the model more dynamically converge without setting an arbitrary learning rate. 
+
+Finally, the `gradient_descent` function uses all of the previously defined methods to run logistic gradient descent given some tuning parameters (such as learning rate and lambda) and returns histories of the coefficients, gradients, losses, step sizes, and predictor names to enable the tracking of how the gradient descent function converges to the minimum of the loss function.
 
 ```{r}
 # format the training dataset by removing the target column, adding an intercept
@@ -1051,7 +1109,7 @@ gradient_descent <- function(training, predictor_names, lambda, tolerance, max_i
 }
 ```
 
-#### Explaining why scaling the features was necessary
+### Explaining Why Scaling the Features Was Necessary
 
 Note that we scale every column in the input space (besides the intercept and target columns) in the `design_matrix` function. When we ran this gradient descent algorithm on unscaled values the logistic loss broke down after the first few iterations. A deeper examination revealed that the scale of the input values could range from 126–564 mg/dL (in the case of cholesterol) whereas our response is only binary. This size difference meant that $\boldsymbol{X\beta}$ would either produce extremely large or extremely small values which would become numerically unstable once the sigmoid function was applied $\sigma(\boldsymbol{X\beta})$.
 
@@ -1059,9 +1117,11 @@ Consider if $\sigma(\boldsymbol{X\beta}) = 0$. Then, $\log(\sigma(\boldsymbol{X\
 
 We scaled down the input space $\boldsymbol{X}$ (besides the intercept and target columns) to combat the numerical instability and our implementation works as expected.
 
-#### Simulating training and testing data for our naive model
+### The Naive Model
 
-Before we run our logistic regression gradient descent implementation on our project data we want to assure that it works on simulated data. The following method does this and we show a preview of the generated data as well as the true coefficients.
+#### Simulating Training and Testing Data for Our Naive Model
+
+Before we run our logistic regression gradient descent implementation on our project data we want to assure that it works on simulated data. The following method executes this and we show a preview of the generated data as well as the true coefficients.
 
 ```{r}
 simulate_data <- function(n_observations = 5000, p_predictors = 10) {
@@ -1111,7 +1171,7 @@ simulated_training$data %>% head
 simulated_training$true_coefficients %>% print
 ```
 
-We also will define the simulated testing dataset which will be used later to evaluate the naive model later. It is generated in a similar manner to its training counterpart.
+We also will define the simulated testing/validation dataset which will be used later to evaluate the validation set accuracy of the naive model later. It is generated in a similar manner to its training counterpart.
 
 ```{r}
 simulated_testing <- simulate_data(n_observations = 1000, p_predictors = p_predictors)
@@ -1119,7 +1179,7 @@ simulated_testing$data %>% head
 simulated_testing$true_coefficients %>% print
 ```
 
-#### Creating the naive model and analyzing its outputs
+#### Creating the Naive Model and Analyzing Its Outputs
 
 We then now define our naive model by calling our `gradient_descent` implementation on the `simulated_training` object so that we can later visualize how the model performs on the testing stage and, eventually, how it performs on unseen testing data.
 
@@ -1135,7 +1195,7 @@ naive_model <- gradient_descent(
 
 We additionally define some methods for understanding the output of our model including a table of coefficients, a plot of losses over iterations, a plot of step sizes over iterations, and a plot of coefficients over iterations.
 
-We can now analyze what the naive model converged on for its coefficients versus the true coefficients by using the `compare_coefficients` method. This function generates a table of true and expected coefficients with a third column being their difference to more easily view how big the difference is.
+We can now analyze what the naive model converged on for its coefficients versus the true coefficients by using the `compare_coefficients` method. This function generates a table of true (known since these were simulated) and expected coefficients with a third column being their difference to more easily view how big the difference is.
 
 ```{r}
 compare_coefficients <- function(modelA_coefficients, modelB_coefficients, predictors, column_names) {
@@ -1160,6 +1220,7 @@ compare_coefficients(
 	column_names = c("estimated coef.", "true coef.")
 )
 ```
+#### Losses of the Naive Model
 
 We can also observe the logistic loss history saved in the `naive_model` object and view it on a plot via the `plot_losses` function. Note that this method accepts a `model_type` parameter which is placed into the plot's title for clarity so that this function can be used by both the naive and (later) the final models.
 
@@ -1194,6 +1255,8 @@ plot_losses <- function(model, model_type = "normal") {
 plot_losses(model = naive_model, model_type = "naive")
 ```
 
+#### Changes in the Step Sizes of the Naive Model
+
 We can additionally observe the step sizes history saved in the `naive_model` object and view it on a plot via the `plot_steps` function. It is nearly identical to `plot_losses` but with different labels and verbiage.
 
 ```{r}
@@ -1220,6 +1283,9 @@ plot_steps <- function(model, model_type = "normal") {
 
 plot_steps(model = naive_model, model_type = "naive")
 ```
+As observed above, the step size dynamically adjusts (starting large, before generally decreasing) as intended, to ensure faster convergence.
+
+#### Changes in the Coefficients of the Naive Model
 
 We lastly observe the coefficients history saved in the `naive_model` object and view it on a plot via the `plot_steps` function. This allows readers to see, first off, a snapshot of all the coefficients across the iterations and, secondly, see how each coefficient changes throughout the descent.
 
@@ -1256,6 +1322,8 @@ plot_betas <- function(model, model_type = "normal") {
 
 plot_betas(model = naive_model, model_type = "naive")
 ```
+
+#### Evaluating the Accuracy of the Naive Model
 
 Having analyzed the naive model coefficients and visualized the losses and step sizes, we now seek to evaluate it by applying the `testing` subset and seeing how accurate its predictions are. We do this with the `prediction_metrics` method.
 
@@ -1325,7 +1393,10 @@ naive_metrics <- prediction_metrics(
 )
 ```
 
-#### Fitting our normal model and R's `glm` model
+
+
+
+#### Fitting Our Normal Model and R's glm Model
 
 We will analyze the metrics of the naive model once we do the same with the normal model and R's `glm` model. Now we create these model objects and examine the output of the normal model output.
 
@@ -1360,7 +1431,9 @@ To see the significance of the selected predictors in explaining our response, w
 summary(r_model)
 ```
 
-Examining the $p$-values for these coefficients we see that `exang`, `oldpeak`, and `ca` are all statistically significant predictors (all $< 0.5 = \alpha$) in explaining the presence of coronary artery disease.
+Specifically, the $p$-values for these coefficients we see that `exang`, `oldpeak`, and `ca` are all statistically significant predictors (all $< 0.5 = \alpha$) in explaining the presence of coronary artery disease.
+
+Since the first two, `exang`, `oldpeak`, relate to measurements that indicate that a patient's body does not adjust well to exercise, this may be suggestive evidence that corrective procedures might involve policies or treatments that help a patient adjust more to exercise. In other words, more physical activity might lower a patient's risk of having CAD.
 
 ```{r}
 plot_losses(model = log_model, model_type = "normal")
@@ -1423,7 +1496,7 @@ r_metrics <- prediction_metrics(
 )
 ```
 
-We now look at the accuracy and AUC metrics across all three models as summarized in the following table.
+We now look at the accuracy and area under curve (AUC) metrics across all three models as summarized in the following table.
 
 ```{r}
 all_metrics <- data.frame(
@@ -1454,8 +1527,12 @@ colnames(all_metrics) <- c("training accuracy", "training auc", "testing accurac
 
 all_metrics
 ```
+In all metrics, our adjusted model outperforms the naive model and is on par with the glm. A high AUC indicates that the accuracy of our model is such that we face a favourable trade-off between false and true positives through adjusting a classification threshold. This is something we analyse more strongly in the more strongly predictive models later.
 
-We want to also view the Receiver Operating Characteristic (ROC) curve available via the `pROC` library in our wrapper function of `plot_ROC` to compare the true and false positive rates. Note that this is plotted on the `testing` data as another visualization of model accuracy. As expected, the naive model is slightly over 50% which indicates that our gradient descent implementation picks up some slight noise in the data but is overall not much better than flipping a coin to determine heart disease presence based on `exang`, `oldpeak`, and `ca`. Alternatively, our model and R's `glm` model both have an AUC of 81% which suggests that they perform strongly in distinguishing between CAD presence and absence.
+
+To grasp this visually, we want to also view the Receiver Operating Characteristic (ROC) curve available via the `pROC` library in our wrapper function of `plot_ROC` to compare the true and false positive rates. Note that this is plotted on the `testing` data as another visualization of model accuracy. As expected, the naive model is slightly over 50% which indicates that our gradient descent implementation picks up some slight noise in the data but is overall not much better than flipping a coin to determine heart disease presence based on `exang`, `oldpeak`, and `ca`. 
+
+Alternatively, our model and R's `glm` model both have an AUC of 81% which suggests that they perform strongly in distinguishing between CAD presence and absence.
 
 ```{r}
 plot_ROC <- function(metrics, curve_color, y_height, add_to = FALSE) {
@@ -1502,11 +1579,15 @@ confusion_matrix <- testing_df %>%
 
 As we see from the confusion matrix above our model correctly classifies heart disease prevalence the majority of the time. This model incorrectly classifies patients with heart disease (46) much more than incorrectly classifying patients without heart disease (19), which indicates that our model prefers to be safer on average than risk casualties or death. The above confusion matrix suggests that our model performs moderately well on the holdout data which is supported by an AUC score of around 79%.
 
-### Non-baseline interpretable model
 
-We choose a short classification tree as a relatively interpretable model, given that it can be read and understood in an intuitive way without necessarily having specific domain knowledge.
 
-This is because instead of using a complicated functional form for how the outcome depends on its predictors, when a tree is fit to data, at each level of depth it creates a single split into different groupings, or "nodes." For example, all those patients with `cp` ***[we should probably write in English what the predictors mean before using their acronym, especially in paragraph form like this]*** above 0.5 ***[units?]*** may be assigned to one grouping and those below to another group. This ***[divergence? should use a word after "this" to clarify what you're referring to]*** means each grouping will have different characteristics (which are used to predict probabilities). In turn, at each consequent level of depth, these groupings are split further and further based on being either side of a threshold for a chosen predictor.
+## Non-baseline Interpretable Model: Short Depth Classification Tree
+
+### Motivation
+
+We choose a **short classification tree** as a relatively interpretable model, given that it can be read and understood in an intuitive way without necessarily having specific domain knowledge.
+
+This is because instead of using a complicated functional form for how the outcome depends on its predictors, when a tree is fit to data, at each level of depth it creates a single split into different groupings, or "nodes." For example, all those patients with `cp` (chest pain type) above 0.5 (on a scale of 0 through 3 inclusive, with 3 being the most severe chest pain) may be assigned to one grouping and those below to another group. This divergence/splitting by construction means each grouping will have different characteristics (which are used to predict probabilities). In turn, at each consequent level of depth, these groupings are split further and further based on being either side of a threshold for a chosen predictor.
 
 Each of these splits is created in such a way to maximise node purity. This is done by assigning the predicted probability of the positive class conditional on being in that node (and having predictor values that put a patient in that grouping) as the proportion of training observations in the positive class.
 
@@ -1551,6 +1632,7 @@ In the case of heart disease diagnosis, we might not simply want the highest acc
 
 On the one hand, false positives may cause undue stress, when someone is misleadingly worried about heart disease that they may not have.
 
+
 If prescribed treatment is benign, such as in the case of lifestyle changes, it will make sense to be less cautious about coming to a positive diagnosis because taking on this prescription will at best come at large personal benefits and at worst incur marginal costs relative to those benefits. Eating less sugar and saturated fat leads to a slight quality of life reduction in the short term, but a healthier lifestyle has substantial benefits and often improves quality of life in the long term and that derived from profound and not superficial pleasures, even if a patient does not yet have nor is at risk of heart disease.
 
 This applies also to more mild medicine prescriptions, with side-effects extending from negligible symptoms to some only as severe as dizziness, headaches and fatigue (ibid).
@@ -1563,16 +1645,27 @@ Likewise, any non-professional (perhaps a patient themselves, or a trainee) coul
 
 This first tree flow chart can be used either for informative purposes as to what may tentatively be leading factors behind heart disease, or diagnosis situations in which all the measures in the training data are accessible to the professional giving the diagnosis.
 
-In this case, we use the `rpart` engine as opposed to the `tree` engine.
+In this case, we use the `rpart` engine as opposed to the `tree` engine for more pleasant visualisations.
 
-***[please delete unused lines from code, especially if it’s all commented out]***
+#### Pre-Adjustment
 
-We begin by setting up a tuning grid and then viewing its accuracy and plot of the grid.
+We will eliminate the target and sex factor column, since we no-longer need it. Target in this section is classed as y.
+
+```{r}
+Heart_train_old <- Heart_train # save out the old data in case we need it
+Heart_train <- Heart_train %>% dplyr::select(-target , -sex_factor) #eliminate the unneeded columns
+Heart_train_new <- Heart_train # save the new data to return to it later
+```
+
+### Model With All the Predictors
+
+#### Validate the Best Tuning Parameters
+
+We begin by setting up a tuning grid and then viewing its validation set accuracy, plotting this accuracy against a tuning parameter and gauging which level of complexity appears to achieve the best simplicity-accuracy trade-off.
 
 ```{r}
 tuning_grid_tree <- expand.grid(
 	cp = c(0.001),
-	#seq(0.001, 0.0001, length.out = 10),   # Cost complexity pruning (alpha parameter that imposes penalty on tree depth)
 	maxdepth = c(1,3,4,5,6,8,10,15,20),  # Limit tree depth
 	min_n = c(5),  # Number of obs per split, so if higher, reduces splits
 	thresh = c(0.3,0.4, 0.5),  
@@ -1583,9 +1676,15 @@ tuning_grid_tree$formula <- as.character(tuning_grid_tree$formula)
 
 tree_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid_tree, "tree", "rpart")
 
-# View the accuracy results
+
+```
+```{r, echo = F, eval = F}
+# View the accuracy dataframe
 tree_output$accuracy_df
 ```
+
+
+
 
 ```{r}
 plot_grid(tree_output$accuracy_df, val_measure = "misclass_rate", tp1 = "maxdepth", tp2 = "thresh")
@@ -1603,14 +1702,21 @@ tree_fit_predictions <- tree_output$preds %>%
 tree_fit <- tree_output$model_fits[[best_spec_idx]]
 #tree_output$accuracy_df[ best_spec_idx, ]
 
+```
+```{r, echo=F}
+# check we have extracted the right model
 best_params <- tree_output$accuracy_df[best_spec_idx,]
 best_params %>% glimpse()
 ```
+#### Check the Accuracy of the Best Model 
 
+##### Using A Confusion Matrix
 ```{r}
 graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
 ```
 
+
+##### Using an ROC Curve
 ```{r}
 tree_fit_predictions %>%
 	roc_curve(truth = y, prob_preds, event_level = "second")  %>% 
@@ -1618,6 +1724,10 @@ tree_fit_predictions %>%
 ```
 
 Note that the classification tree only requires that our false positive rate exceeds aprrox. 15% if we should wish to have higher than 75% classification accuracy, lower than the logit. This means that the predictive accuracy (at least within distribution) of a tree model is such that we face a **more favourable tradeoff** with diagnosing patients.
+
+
+
+#### Analyse the Checklist
 
 We now use the best tree model to learn about our data by using the `rpart` engine.
 
@@ -1647,19 +1757,31 @@ rpart.plot(best_rpart_model, roundint = FALSE)
 # the roundint = false is used to avoid a warning that rpart Cannot retrieve the original training data used to build the model (so cannot determine roundint and is.binary for the variables)
 ```
 
+Reading the figure above, and applying it to this 'checklist' framework, the procedure may work as follows:
+
+1. A Patient has more cp (chest pain) greater than 0.5 (in the range of integers 1-3 inclusive), so more severe - move to the left.
+2. A patient has ca (a number of blood vessels coloured by flouroscopy) more than .5 (in the range of integers 1-3 inclusive) - move to the left.
+3. A Patient has a trestbps (resting heart rate) over 109 - move to the left - diagnose as positive for heart disease/CAD. 
+
+Note this final bucket, that furthest to the left, has a conditional probability of 0.04, and suggests that classify the patient as 0, but **Note that the reversal of the target variable, y, implies that this would mean a positive diagnosis of CAD, not a negative one**.
+
+### Limiting to Only Practical Measurements
+
+
 By asking *How would [our tree] change with access to limited predictors?* we filter our input space for the most measurable medical characteristics to fit on later.
 
 ```{r}
-# We now only select a SUBSET of Heart_train which includes only the most measurable data
+# We now only select a SUBSET of Heart_train which includes only the most practically measurable data
 Heart_subset <- Heart_train %>% select(y, sex, age, chol, trestbps)
 ```
 
-We now look for a depth level that has high levels of prediction accuracy yet not ***[make sure to finish this sentence]***
+#### Validate the Best Tuning Parameters
+
+We now look for a depth level that has high levels of prediction accuracy yet not uninterpretable (would not result in a very long checklist).
 
 ```{r}
 tuning_grid_tree <- expand.grid(
   cp = c(0.001),
-  #seq(0.001, 0.0001, length.out = 10),   # Cost complexity pruning (alpha parameter that imposes penalty on tree depth)
   maxdepth = c(1,3,4,5,6,8,10,15,20),  # Limit tree depth
   min_n = c(5),  # Number of obs per split, so if higher, reduces splits
   thresh = c(0.3,0.4, 0.5),  
@@ -1669,14 +1791,19 @@ tuning_grid_tree <- expand.grid(
 tuning_grid_tree$formula <- as.character(tuning_grid_tree$formula)
 ```
 
-We do a similar analysis as above by viewing the grid and graphing it.
+We do a similar analysis as above by graphing the prediction accuracy for each tuning parameter level.
 
 ```{r}
 tree_output <- grid_validate_tidy(Heart_subset, Heart_valid, tuning_grid_tree, "tree", "rpart")
 
+
+```
+
+```{r, echo=F}
 # View the accuracy results
 tree_output$accuracy_df
 ```
+
 
 ```{r}
 plot_grid(tree_output$accuracy_df, val_measure = "misclass_rate", tp1 = "maxdepth", tp2 = "thresh")
@@ -1684,7 +1811,7 @@ plot_grid(tree_output$accuracy_df, val_measure = "misclass_rate", tp1 = "maxdept
 
 It is observable that now the validation set accuracy is only lower at higher depths. A depth of 3 or to 6 makes little additional difference, but this accuracy is too low.
 
-Instead, a depth 8 tree works quite well. Although this is an 8-point checklist, it is still not that many points and requires fewer readings to be taken ***[fewer than what?]***. We can show this by comparing a depth 4 tree to a depth 8 tree.
+Instead, a depth 8 tree works quite well. Although this is an 8-point checklist, it is still not that many points and requires fewer readings to be taken than the earlier model which allowed predictions to be made on all 13 measures at our disposal. We can show this by comparing a depth 4 tree to a depth 8 tree.
 
 We run the above procedure on a depth 4 tree.
 
@@ -1697,15 +1824,19 @@ tree_fit <- tree_output$model_fits[[best_spec_idx]]
 #tree_output$accuracy_df[ best_spec_idx, ]
 ```
 
-```{r}
+```{r, echo = F}
+# check that we have selected the right model
 best_params <- tree_output$accuracy_df[best_spec_idx,]
 best_params %>% glimpse()
 ```
+#### Check the Accuracy of the Best Model 
+
+##### Using A Confusion Matrix
 
 ```{r}
 graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
 ```
-
+##### Using an ROC Curve
 ```{r}
 tree_fit_predictions %>%
 	roc_curve(truth = y, prob_preds, event_level = "second") %>% 
@@ -1725,15 +1856,18 @@ tree_fit <- tree_output$model_fits[[best_spec_idx]]
 #tree_output$accuracy_df[ best_spec_idx, ]
 ```
 
-```{r}
+```{r, echo = F}
+# CHECK extraction of the right model
 best_params <- tree_output$accuracy_df[best_spec_idx,]
 best_params %>% glimpse()
 ```
+#### Check the Accuracy of the Best Model 
 
+##### Using A Confusion Matrix
 ```{r}
 graph_preds(tree_fit_predictions$preds, tree_fit_predictions$y, cm=T, scatter=F)
 ```
-
+##### Using an ROC Curve
 ```{r}
 tree_fit_predictions %>% 
   roc_curve(truth = y, prob_preds, event_level = "second") %>%
@@ -1742,7 +1876,11 @@ tree_fit_predictions %>%
 
 Here, we can see that if, in the first stage of the checklist, we are willing to sacrifice a little extra time for medical professionals to go through a slightly lengthier process (8 steps to diagnosis and not 4 steps to diagnosis), then, in the second stage [the judgement/diagnosis], we **do not need** to sacrifice as many false positive diagnoses to achieve higher accuracies. Specifically, we only need to falsely diagnose approximately 6% of patients if we wish to diagnose 75% or more patients accurately.
 
-#### Directed Acyclic Graph (DAG)
+
+
+## Causality and Suggestive Treatment
+
+### Directed Acyclic Graph (DAG)
 
 To support the interpretation of the decision tree and identify possible sources of confounding, we used a DAG to visualise the causality between variables.
 
@@ -1753,6 +1891,9 @@ Ranked in order of relative impact, the most influential predictor is `oldpeak`,
 The fourth predictor is `restecg`, which looks at resting electrocardiogram results (Patil, 2025). Abnormalities here may potentially signal increased strain on the heart or underlying valvular defects (Patil, 2025). The last two predictors, `chol` (cholesterol levels) and `fbs` (fasting blood sugar) are generally considered more manageable through lifestyle changes (Patil, 2025). Diet, exercise and medication can significantly reduce their impact, whereas the other variables often indicate deeper physiological issues that may require surgical intervention (Patil, 2025).
 
 These predictors not only contribute individually but are also interlinked. For instance, higher fasting blood sugar can lower HDL (good cholesterol) and raise LDL (bad cholesterol) worsening lipid profiles (Patil, 2025). Greater cholesterol levels lead to plaque build-up in the arteries, narrowing them and forcing the heart to work harder (Patil, 2025). This can result in increased blood pressure, known as hypertension, which is often detected as ST depression on an ECG (Patil, 2025). Such findings might prompt further investigation through procedures like a fluoroscopy to assess the extent of cardiovascular damage (Patil, 2025).
+
+
+
 
 ```{r}
 # DAG
@@ -1771,7 +1912,7 @@ heart_dag <- ggdag::dagify(chol ~ fbs,
 ggdag::ggdag(heart_dag) + theme_void()
 ```
 
-#### Confounding
+### Confounding
 
 To explore the role of confounding, we decided to look at GLMs guided by our DAG structure.
 
@@ -1779,10 +1920,14 @@ Please note that while the coefficients discussed remain valid in terms of magni
 
 If we were to include only `trestbps` (resting blood pressure) as a predictor in a logistic regression model against the target, the estimated effect on the log-odds of heart disease might appear stronger than it actually is. This overestimation occurs because `trestbps` is positively correlated with cholesterol, a variable omitted in this simplified model. When blood pressure rises, it coincides with an underlying increase in cholesterol levels. As a result, the model mistakenly attributes some of cholesterol's influence on target to `trestbps`, leading to a higher coefficient. This is an example of Omitted Variable Bias, where the absence of a relevant predictor, in our case cholestrol, causes the effect of an included variable to be biased in magnitude.
 
+#### Regression with Resting Heart Rate Only
+
 ```{r}
 glm2 <- glm(y ~ trestbps, data = Heart_train, family = binomial)
 summary(glm2)
 ```
+
+#### Logistic Regression with Resting Heart Rate Controlling for Cholesterol and Fasting Blood Sugar
 
 While `trestbps` eliminates OVB, we believe controlling for confounders will help in correcting bias.
 
@@ -1792,27 +1937,34 @@ The rise in one unit of `trestbps` signifies a 0.18 unit increase in log odds of
 
 However, here you can note that cholestrol has the highest impact of the three variables on the probability of developing heart disease, namely a 0.24 unit increase in log odds of having heart disease.
 
+
+
+
 ```{r}
 # scale predictors
 trestbps_scale <- scale(Heart_train$trestbps)
 chol_scale <- scale(Heart_train$chol)
 fbs_scale <- scale(Heart_train$fbs)
 
+#fit the model again
 glm3 <- glm(y ~ trestbps_scale + chol_scale + fbs_scale, data = Heart_train, family = binomial)
 summary(glm3)
 ```
 
 Given that cholestrol has the largest relative impacts on the log odds of having heart disease, this should be controlled. This can be done via ensuring that one has a low fat diet (avoiding fatty foods that contain saturated fats), ensuring they exercise more often, stopping smoking and cutting down on drinking habits (NHS, 2025). This decrease in cholestrol as a results in less narrowing of arteries and thus reduced strain on the heart (Cleveland Clinic, 2025). Therefore, we would recommend such changes to patient to ensure that the likelihood of heart disease development remains as low as possible.
 
-### High-dimensional model
 
-#### Logistic regression with 13 variables and lasso regularisation
 
-Lasso regression is utilised to ensure that the most important predictors are selected.
+## High-Dimensional Model: Ordinal Logistic Regression with Lasso Regularisation
+
+
+Lasso regression is utilised to ensure that the most important predictors are selected, again, consistent with our objectives of practicality in diagnosis.
 
 Lasso regression is a regression method that introduces an L1 penalty on the coefficients of the predictors. The L1 penalty ensures sparsity in the model by shrinking coefficients of less important predictors to zero, performing feature selection.
 
-The loss function for Lasso regression in the context of logit is:
+Note that, as mentioned earlier, multicollinearity limits the appropriateness of this form of regularisation over the ridge, but the ridge method does not lead to a reduction in the number of predictors deemed to be relevant, simply a gradual shrinking in their coefficients. Our aim here is for sparsity.
+
+The loss function for Lasso regression in the context of logit (ordinal logistic regression) is:
 
 $$
 \ell_{\text{Lasso}}(\beta) = -\sum_{i=1}^{n} \left[ y_i \log(p(x_i)) + (1 - y_i) \log(1 - p(x_i)) \right] + \lambda \sum_{j=1}^{p} |\beta_j|
@@ -1831,6 +1983,16 @@ $$
 $$
 
 The non-zero coefficients are subsequently extracted to help identify the selected predictors and validated to ensure existence within the data set. These remaining coefficients correspond to the predictors that Lasso deems most important. The selected predictors are validated to ensure they exist in the dataset, and all possible pairs of these predictors are generated for further analysis.
+
+### Pre-Processing
+
+Beforehand, we need to return to the dataset with the target variable column
+
+```{r}
+Heart_train <- Heart_train_old
+```
+
+### Fit the Lasso Logit Regression
 
 ```{r}
 Heart_train$target_numeric <- as.numeric(Heart_train$y) - 1
@@ -1881,7 +2043,10 @@ results <- data.frame(Predictor1 = character(),
                       MisclassificationRate = numeric()) # predictor combos stored
 ```
 
-### Predictively Accurate Model Without Interpretability: Classification Random Forest
+
+
+
+## Predictively Accurate Model Without Interpretability: Classification Random Forest
 
 Earlier, we evaluated how a single tree model could result in a more-desirable trade-off of more false positive diagnoses in return for more true positive diagnoses compared to a logit, but **only** if either we had access to measurements that are less practical to gather from a patient, **or** we were willing to extend the depth and complexity of the tree, and hence, the time it would take for a medical professional to carry out a step-based "checklist" diagnostic process.
 
@@ -1918,18 +2083,18 @@ In particular, we argue that between our Cleveland sample and the wider US, we m
 
 We first create a tuning grid and for the random forest and then view the grid as well as its plot before analyzing the results.
 
-#### Pre-Adjustment
+### Pre-Adjustment
 
-We will eliminate the target and the target_numeric columns, since we no-longer need them.
+We need to re-use the heart_train_new dataset without the columns that are not necessary for this section.
 
 ```{r}
-Heart_train <- Heart_train %>% dplyr::select(-target, -target_numeric)
+Heart_train <- Heart_train_new
 ```
 
 
-#### Validate Best Tuning Parameters
+### Validate Best Tuning Parameters
 
-##### Set up a Grid of Tuning Parameters
+#### Set up a Grid of Tuning Parameters
 
 ```{r}
 tuning_grid_rf <- expand.grid(
@@ -1939,6 +2104,10 @@ tuning_grid_rf <- expand.grid(
   formula = as.character(formulas[3])
 )
 tuning_grid_rf$formula = as.character(tuning_grid_rf$formula)
+
+```
+```{r, echo = F}
+# inspect the tuning grid set-up
 tuning_grid_rf
 ```
 
@@ -1946,8 +2115,18 @@ tuning_grid_rf
 ```{r}
 # Run the grid validation function
 rf_output <- grid_validate_tidy(Heart_train, Heart_valid, tuning_grid_rf, "random_forest", "randomForest")
+
+```
+
+```{r, echo = F}
+# inspect the accuracy dataframe
 rf_output$accuracy_df
 ```
+
+### Visualise the Accuracy Based on Tuning Parameters
+
+We observe below that allowing splits on only 2 - 4 of the variables is sufficient to achieve high accuracy, supporting the potential to achieve accurate diagnoses with few measurements. 
+
 
 ```{r}
 plot_grid(rf_output$accuracy_df, val_measure = "misclass_rate", tp1 = "mtry", tp2 = "thresh")
@@ -1961,11 +2140,19 @@ rf_fit_predictions <- rf_output$preds %>%
 #check_preds
 ```
 
+### Check the Accuracy of the Best Model 
+
+
+
 We similarly look at the confusion matrix and the ROC curve to gauge cut-off trade-off.
+
+#### Using A Confusion Matrix
 
 ```{r}
 graph_preds(rf_fit_predictions$preds, rf_fit_predictions$y, cm=T, scatter=F)
 ```
+
+#### Using an ROC Curve
 
 ```{r}
 rf_fit_predictions %>% 
@@ -2010,7 +2197,18 @@ plot(pdp_rf)
 
 Unfortunately, each individual predictor only appears to have a small marginal/partial effect on the probability of having heart disease. Instead, its *conditional* effects may be more important.
 
+Moreover, the reversal of the outcome variable means that, for example, in the top left figure above, we should interpret a higher value of oldpeak (a longer short-term exercise-induced depression), in increasing the conditional probability of 0, is actually increasing the conditional probability of being **positive** for heart disease (CAD). 
+
+### Mixed Subset Selection for a Sparse Random Forest
+
 To find the best $n$-variable random forest, we follow a similar procedure but with using mixed subset selection and then examining the plots.
+
+Of course, a key limitation is that this method is greedy, moving either up (or down) in the number of predictors towards a the next best (Highest validation set accuracy) model **in the region of the number of predictors** of the current model, so may often get stuck in local optima.
+
+Using the mixed approach, we hope to mitigate this, by allowing the fit to 'change its mind' on what the best $n$ variable model may be by taking steps backward after having had the 'foresight' of first moving forward and adding some predictors that may be more relevant to keep than those initially thought to be the best.
+
+
+#### Set up the Tuning Grid
 
 ```{r}
 tuning_grid_rf_step <- expand.grid(
@@ -2020,8 +2218,15 @@ tuning_grid_rf_step <- expand.grid(
   formula = as.character("")
 )
 tuning_grid_rf_step$formula = as.character(tuning_grid_rf_step$formula)
+
+```
+
+```{r, echo = F}
+# check we have the right dataframe
 tuning_grid_rf_step
 ```
+
+#### Run the Stepwise Selection
 
 ```{r}
 stepwise_selection_rf_output <- stepwise_selection(Heart_train, Heart_valid, tuning_grid_rf_step[1,], "random_forest", "randomForest", predictors_lim = 4)
@@ -2029,11 +2234,13 @@ stepwise_rf_df <- stepwise_selection_rf_output$accuracy_df  # Table with steps
 stepwise_rf_df
 ```
 
+#### Analyse the Prediction Accuracy of Each Model
+
 ```{r}
 plot_grid(stepwise_rf_df, val_measure = "misclass_rate", tp1 = "total_steps", tp2="formula", tp3="n")
 ```
 
-We find that the second 2 variable random forest model (3 forward steps and 2 backward steps and then another forward step) works quite well with `chol` and `thalach` being the most accurate. Having selected the best model, we now extract this specification, examine the tuning parameters, look at the confusion matrix, and graph the ROC curve like before.
+We find that the second 2 variable random forest model (3 forward steps and 2 backward steps and then another forward step) works quite well with `chol` and `thalach` being the most accurate (corresponding to serum cholesterol and maximum heart rate). Having selected the best model, we now extract this specification, examine the tuning parameters, look at the confusion matrix, and graph the ROC curve like before.
 
 ```{r}
 # Check the predictions of the model with the best trade-off:
@@ -2043,14 +2250,24 @@ stepwise_rf_fit <- stepwise_selection_rf_output$model_fits[[best_spec_idx]]
 #tree_output$accuracy_df[ best_spec_idx, ]
 ```
 
-```{r}
+```{r, echo = F}
+#check we have the right output
 best_params <- stepwise_rf_df[best_spec_idx,]
 best_params %>% glimpse()
 ```
 
+
+### Check the Accuracy of the Best n Variable Model 
+
+We similarly look at the confusion matrix and the ROC curve to gauge cut-off trade-off.
+
+#### Using A Confusion Matrix
+
 ```{r}
 graph_preds(stepwise_rf_fit_predictions$preds, stepwise_rf_fit_predictions$y, cm=T, scatter=F)
 ```
+#### Using an ROC Curve
+
 
 ```{r}
 stepwise_rf_fit_predictions %>%
@@ -2062,19 +2279,34 @@ Unlike with the logit, we don't face nearly as steep a trade-off with false posi
 
 Moreover, this model can be used to conduct highly practical diagnoses, since it only requires taking two pieces of data from the patient that can each be accurately collected in a short space of time.
 
-### Conclusion
+# Conclusion
 
 We had two key objectives in our project:
 
-1.  To predict the likelihood of an individual developing heart disease - specifically, to identify those at higher risk and develop a model that could be used to assist in diagnosis beyond our initial sample.
+1.  To accurately predict the likelihood of an individual developing heart disease with as few and as practical measures as possible. Specifically, we wish to identify those at higher risk and develop a model that could be used to assist in diagnosis as far beyond our initial sample as reasonably possible.
 
-2.  To identify non-surgical treatment methodologies that can help reduce heart disease risk.
+2.  To identify practical, non-surgical treatment methodologies that can help reduce heart disease risk.
 
-The models we have developed can be used in a screening setting to flag individuals who may benefit from lifestyle interventions and further medical attention. Among the modifiable risk factors analysed, diet emerged as one of the most effective and accessible methods of reducing the risk of heart disease. It is a controllable factor that individuals can change relatively easily, making it a highly practical non-surgical intervention.
+Our strong focus on simplicity and sparsity, as well as on capturing fundamental relationships in the data, suggest that the models we have developed can be highly useful in a screening setting to accurately flag individuals who may benefit from lifestyle interventions and further medical attention, while requiring only a small subset of readings.
+
+We identified that a patient's heart disease likelihoods could be captured closely by only a few key indicators and even by simple rules of thumb either pertaining to the 'general' effect of a predictor variable (logistical regressions) or through its effect in distinguishing a patient from other patients (tree-based regressions).
+
+We also identified which variables tend to be the most important in terms of their predictive contributions or estimated coefficient 'effects' on suggestively causing heart disease through various model fitting procedures, finding that similar variables tend to stand out consistently in each fitting procedure.
+
+In the case of our most predictively accurate model, patients could be diagnosed with above 95% accuracy with only a reading of heart rate and serum cholesterol, both of which are relatively practical to gather from patients with a heart rate monitor and a simple blood test.
+
+These findings can facilitate faster, cheaper and earlier diagnosis, helping to prescribe the corresponding treatments/lifestyle changes to patients in order to prevent a worsening of their condition.
+
+Among the modifiable risk factors analysed, diet emerged as one of the most effective and accessible methods of reducing the risk of heart disease. It is a controllable factor that individuals can change relatively easily, making it a highly practical non-surgical intervention.
 
 In particular, dietary changes play a crucial role in lowering cholesterol levels, which in turn can positively influence other important predictors of heart disease, such as blood pressure. A healthy diet can help regulate cholesterol, reduce blood pressure and enhance overall cardiovascular health, highlighting it as a powerful and effective non-surgical approach to prevention.
 
-### References
+Nonetheless, the drawbacks of our dataset, notably its geographical constraints and the questionable pre-cleaning, limit the extent to which our findings can, on their own, reliably be used to generalise to wider populations and truly be trusted to be reflective of the underlying relationships.
+
+
+# Appendix
+
+## References
 
 
 
